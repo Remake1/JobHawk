@@ -10,6 +10,50 @@ import (
 	"encoding/json"
 )
 
+const deleteSearchQueryByID = `-- name: DeleteSearchQueryByID :execrows
+DELETE FROM search_queries
+WHERE id = $1 AND source_type = $2
+`
+
+type DeleteSearchQueryByIDParams struct {
+	ID         int64  `json:"id"`
+	SourceType string `json:"source_type"`
+}
+
+func (q *Queries) DeleteSearchQueryByID(ctx context.Context, arg DeleteSearchQueryByIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSearchQueryByID, arg.ID, arg.SourceType)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getSearchQueryByID = `-- name: GetSearchQueryByID :one
+SELECT id, name, source_type, filters, enabled, created_at, updated_at
+FROM search_queries
+WHERE id = $1 AND source_type = $2
+`
+
+type GetSearchQueryByIDParams struct {
+	ID         int64  `json:"id"`
+	SourceType string `json:"source_type"`
+}
+
+func (q *Queries) GetSearchQueryByID(ctx context.Context, arg GetSearchQueryByIDParams) (SearchQuery, error) {
+	row := q.db.QueryRow(ctx, getSearchQueryByID, arg.ID, arg.SourceType)
+	var i SearchQuery
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.SourceType,
+		&i.Filters,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getSearchQueryByName = `-- name: GetSearchQueryByName :one
 SELECT id, name, source_type, filters, enabled, created_at, updated_at
 FROM search_queries

@@ -1,0 +1,242 @@
+package telegram
+
+import (
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
+
+	"jobhawk/internal/jobs"
+	"jobhawk/internal/searchqueries"
+)
+
+const (
+	callbackHome      = "m:home"
+	callbackList      = "m:list"
+	callbackAdd       = "m:add"
+	callbackCancel    = "w:cancel"
+	callbackSkipLoc   = "w:skiploc"
+	callbackSkipTitle = "w:skiptitle"
+	callbackSave      = "w:save"
+	callbackRestart   = "w:restart"
+)
+
+type screen struct {
+	text     string
+	entities []telego.MessageEntity
+	keyboard *telego.InlineKeyboardMarkup
+}
+
+func formattedScreen(keyboard *telego.InlineKeyboardMarkup, parts ...tu.MessageEntityCollection) screen {
+	text, entities := tu.MessageEntities(parts...)
+	return screen{text: text, entities: entities, keyboard: keyboard}
+}
+
+func callbackButton(text, data string) telego.InlineKeyboardButton {
+	return tu.InlineKeyboardButton(text).WithCallbackData(data)
+}
+
+func mainMenuScreen() screen {
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(callbackButton("🔎 Search queries", callbackList)),
+		tu.InlineKeyboardRow(callbackButton("➕ Add search query", callbackAdd)),
+	)
+	return formattedScreen(
+		keyboard,
+		tu.Entity("JobHawk").Bold(),
+		tu.Entity("\n\nCreate and manage job searches, or run one immediately."),
+	)
+}
+
+func queryListScreen(queries []searchqueries.GreenhouseQuery) screen {
+	rows := make([][]telego.InlineKeyboardButton, 0, len(queries)+2)
+	for _, query := range queries {
+		rows = append(rows, tu.InlineKeyboardRow(callbackButton(
+			"🔎 "+truncateButtonText(query.Name),
+			queryCallback("view", query.ID),
+		)))
+	}
+	rows = append(rows,
+		tu.InlineKeyboardRow(callbackButton("➕ Add search query", callbackAdd)),
+		tu.InlineKeyboardRow(callbackButton("← Main menu", callbackHome)),
+	)
+
+	if len(queries) == 0 {
+		return formattedScreen(
+			tu.InlineKeyboard(rows...),
+			tu.Entity("Search queries").Bold(),
+			tu.Entity("\n\nYou don't have any saved searches yet."),
+		)
+	}
+	return formattedScreen(
+		tu.InlineKeyboard(rows...),
+		tu.Entity("Search queries").Bold(),
+		tu.Entityf("\n\n%d saved. Select one to manage it.", len(queries)),
+	)
+}
+
+func queryDetailScreen(query searchqueries.GreenhouseQuery) screen {
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(
+			callbackButton("▶ Run query", queryCallback("run", query.ID)),
+			callbackButton("🗑 Delete", queryCallback("delete", query.ID)),
+		),
+		tu.InlineKeyboardRow(callbackButton("← Search queries", callbackList)),
+	)
+	return formattedScreen(keyboard, querySummaryParts(query)...)
+}
+
+func deleteConfirmationScreen(query searchqueries.GreenhouseQuery) screen {
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(callbackButton("🗑 Yes, delete", queryCallback("confirm_delete", query.ID))),
+		tu.InlineKeyboardRow(callbackButton("Cancel", queryCallback("view", query.ID))),
+	)
+	return formattedScreen(
+		keyboard,
+		tu.Entity("Delete search query?").Bold(),
+		tu.Entity("\n\n"),
+		tu.Entity(query.Name).Code(),
+		tu.Entity(" will be permanently deleted."),
+	)
+}
+
+func searchResultsScreen(query searchqueries.GreenhouseQuery, found []jobs.Job) screen {
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(callbackButton("↻ Run again", queryCallback("run", query.ID))),
+		tu.InlineKeyboardRow(callbackButton("← Query details", queryCallback("view", query.ID))),
+	)
+	parts := []tu.MessageEntityCollection{
+		tu.Entity(query.Name).Bold(),
+		tu.Entityf("\n\n%d matching open job(s)", len(found)),
+	}
+	if len(found) == 0 {
+		parts = append(parts, tu.Entity("\n\nNo jobs currently match every filter."))
+		return formattedScreen(keyboard, parts...)
+	}
+
+	const maxResults = 10
+	for i, job := range found {
+		if i == maxResults {
+			parts = append(parts, tu.Entityf("\n\n…and %d more.", len(found)-maxResults))
+			break
+		}
+		parts = append(parts,
+			tu.Entity("\n\n"),
+			tu.Entity(truncateDisplayText(job.Title, 160)).Bold(),
+			tu.Entity("\n"+truncateDisplayText(job.Location, 100)),
+		)
+		if job.URL != "" {
+			parts = append(parts, tu.Entity("\nOpen job").TextLink(job.URL))
+		}
+	}
+	return formattedScreen(keyboard, parts...)
+}
+
+func truncateDisplayText(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes-1]) + "…"
+}
+
+func creationPromptScreen(session creationSession, validationError string) screen {
+	var title, instruction string
+	rows := make([][]telego.InlineKeyboardButton, 0, 2)
+	switch session.step {
+	case creationName:
+		title = "Step 1 of 4 — Name"
+		instruction = "Give this search a short, recognizable name.\n\nExample: Point72 SWE Internship 2027"
+	case creationBoard:
+		title = "Step 2 of 4 — Greenhouse board"
+		instruction = "Enter the board token from the Greenhouse URL.\n\nExample: point72"
+	case creationLocation:
+		title = "Step 3 of 4 — Location"
+		instruction = "Enter the exact location shown by Greenhouse.\n\nExample: Warsaw, Poland"
+		rows = append(rows, tu.InlineKeyboardRow(callbackButton("Skip location", callbackSkipLoc)))
+	case creationTitleWords:
+		title = "Step 4 of 4 — Title words"
+		instruction = "Enter comma-separated words that must all occur in the job title.\n\nExample: 2027, Internship, Software"
+		if session.draft.Location != "" {
+			rows = append(rows, tu.InlineKeyboardRow(callbackButton("Skip title words", callbackSkipTitle)))
+		}
+	}
+	rows = append(rows, tu.InlineKeyboardRow(callbackButton("Cancel", callbackCancel)))
+
+	parts := []tu.MessageEntityCollection{
+		tu.Entity("New Greenhouse search").Bold(),
+		tu.Entity("\n"),
+		tu.Entity(title).Italic(),
+		tu.Entity("\n\n" + instruction),
+	}
+	if validationError != "" {
+		parts = append(parts, tu.Entity("\n\n⚠ "+validationError).Bold())
+	}
+	return formattedScreen(tu.InlineKeyboard(rows...), parts...)
+}
+
+func creationReviewScreen(session creationSession) screen {
+	query := searchqueries.GreenhouseQuery{Name: session.draft.Name, Filters: session.draft.Filters}
+	parts := []tu.MessageEntityCollection{
+		tu.Entity("Review new search").Bold(),
+		tu.Entity("\n\nName\n"),
+		tu.Entity(session.draft.Name).Code(),
+	}
+	parts = append(parts, querySummaryParts(query)[1:]...)
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(callbackButton("✓ Save search", callbackSave)),
+		tu.InlineKeyboardRow(
+			callbackButton("↺ Start over", callbackRestart),
+			callbackButton("Cancel", callbackCancel),
+		),
+	)
+	return formattedScreen(keyboard, parts...)
+}
+
+func querySummaryParts(query searchqueries.GreenhouseQuery) []tu.MessageEntityCollection {
+	return []tu.MessageEntityCollection{
+		tu.Entity(query.Name).Bold(),
+		tu.Entity("\n\nSource\n"),
+		tu.Entity("Greenhouse").Code(),
+		tu.Entity("\n\nBoard\n"),
+		tu.Entity(query.Filters.BoardToken).Code(),
+		tu.Entity("\n\nLocation\n"),
+		tu.Entity(valueOrAny(query.Filters.Location)).Code(),
+		tu.Entity("\n\nTitle contains every word\n"),
+		tu.Entity(wordsOrAny(query.Filters.TitleWords)).Code(),
+	}
+}
+
+func queryCallback(action string, id int64) string {
+	return "q:" + action + ":" + strconv.FormatInt(id, 10)
+}
+
+func truncateButtonText(value string) string {
+	const maxRunes = 42
+	value = strings.TrimSpace(value)
+	if utf8.RuneCountInString(value) <= maxRunes {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:maxRunes-1]) + "…"
+}
+
+func parseQueryCallback(data string) (action string, id int64, ok bool) {
+	parts := strings.Split(data, ":")
+	if len(parts) != 3 || parts[0] != "q" {
+		return "", 0, false
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || id <= 0 {
+		return "", 0, false
+	}
+	switch parts[1] {
+	case "view", "run", "delete", "confirm_delete":
+		return parts[1], id, true
+	default:
+		return "", 0, false
+	}
+}

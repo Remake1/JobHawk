@@ -29,8 +29,15 @@ type Filters struct {
 }
 
 func (f Filters) Normalize() (Filters, error) {
-	f.BoardToken = strings.TrimSpace(f.BoardToken)
+	boardToken, err := NormalizeBoardToken(f.BoardToken)
+	if err != nil {
+		return Filters{}, err
+	}
+	f.BoardToken = boardToken
 	f.Location = strings.TrimSpace(f.Location)
+	if len([]rune(f.Location)) > 200 {
+		return Filters{}, errors.New("location must be 200 characters or fewer")
+	}
 
 	words := make([]string, 0, len(f.TitleWords))
 	seen := make(map[string]struct{}, len(f.TitleWords))
@@ -38,6 +45,9 @@ func (f Filters) Normalize() (Filters, error) {
 		word = strings.TrimSpace(word)
 		if word == "" {
 			continue
+		}
+		if len([]rune(word)) > 100 {
+			return Filters{}, errors.New("each title word must be 100 characters or fewer")
 		}
 		key := strings.ToLower(word)
 		if _, exists := seen[key]; exists {
@@ -47,17 +57,28 @@ func (f Filters) Normalize() (Filters, error) {
 		words = append(words, word)
 	}
 	f.TitleWords = words
+	if len(f.TitleWords) > 20 {
+		return Filters{}, errors.New("no more than 20 title words are allowed")
+	}
 
-	if f.BoardToken == "" {
-		return Filters{}, errors.New("Greenhouse board token is required")
-	}
-	if !boardTokenPattern.MatchString(f.BoardToken) {
-		return Filters{}, errors.New("Greenhouse board token may contain only letters, digits, underscores, and hyphens")
-	}
 	if f.Location == "" && len(f.TitleWords) == 0 {
 		return Filters{}, errors.New("at least one location or title word filter is required")
 	}
 	return f, nil
+}
+
+func NormalizeBoardToken(token string) (string, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", errors.New("Greenhouse board token is required")
+	}
+	if len(token) > 100 {
+		return "", errors.New("Greenhouse board token must be 100 characters or fewer")
+	}
+	if !boardTokenPattern.MatchString(token) {
+		return "", errors.New("Greenhouse board token may contain only letters, digits, underscores, and hyphens")
+	}
+	return token, nil
 }
 
 type Client struct {

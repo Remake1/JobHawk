@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -19,7 +20,9 @@ import (
 type queryStore interface {
 	SaveGreenhouse(context.Context, string, greenhouse.Filters) (searchqueries.GreenhouseQuery, error)
 	GetGreenhouse(context.Context, string) (searchqueries.GreenhouseQuery, error)
+	GetGreenhouseByID(context.Context, int64) (searchqueries.GreenhouseQuery, error)
 	ListGreenhouse(context.Context) ([]searchqueries.GreenhouseQuery, error)
+	DeleteGreenhouse(context.Context, int64) (bool, error)
 }
 
 type greenhouseSearcher interface {
@@ -33,6 +36,8 @@ type Bot struct {
 	queryStore         queryStore
 	greenhouseSearcher greenhouseSearcher
 	subscribers        *subscribers.Store
+	creationMu         sync.Mutex
+	creation           *creationSession
 }
 
 func New(
@@ -65,7 +70,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.logger.Info("bot started", "username", me.Username)
 
 	updates, err := b.api.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
-		AllowedUpdates: []string{"message"},
+		AllowedUpdates: []string{"message", "callback_query"},
 	})
 	if err != nil {
 		return fmt.Errorf("start long polling: %w", err)
@@ -83,7 +88,9 @@ func (b *Bot) Run(ctx context.Context) error {
 				}
 				return errors.New("Telegram update stream closed unexpectedly")
 			}
-			if update.Message != nil {
+			if update.CallbackQuery != nil {
+				b.handleCallbackQuery(ctx, update.CallbackQuery)
+			} else if update.Message != nil {
 				b.handleMessage(ctx, update.Message)
 			}
 		}
@@ -91,20 +98,38 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
-	command, args, ok := parseCommand(message.Text)
-	if !ok {
+	if message.Chat.ID != b.allowedChatID {
+		b.logger.Warn("ignored message from unauthorized chat", "chat_id", message.Chat.ID)
 		return
 	}
-	if message.Chat.ID != b.allowedChatID {
-		b.logger.Warn("ignored command from unauthorized chat", "chat_id", message.Chat.ID, "command", command)
+	text := strings.TrimSpace(message.Text)
+	if text == "" {
+		return
+	}
+	if !strings.HasPrefix(text, "/") && b.hasCreationSession() {
+		b.handleCreationInput(ctx, message.Chat.ID, text)
+		return
+	}
+
+	command, args, ok := parseCommand(text)
+	if !ok {
 		return
 	}
 
 	var response string
 	switch command {
-	case "/start", "/subscribe":
+	case "/start":
 		b.subscribers.Add(message.Chat.ID)
-		response = "You're subscribed to new job alerts. Use /status to check your subscription or /stop to pause alerts."
+		b.clearCreationSession()
+		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
+		return
+	case "/menu", "/help":
+		b.clearCreationSession()
+		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
+		return
+	case "/subscribe":
+		b.subscribers.Add(message.Chat.ID)
+		response = "You're subscribed to future job alerts. Use /menu to manage searches."
 	case "/stop", "/unsubscribe":
 		b.subscribers.Remove(message.Chat.ID)
 		response = "Job alerts are paused. Use /subscribe whenever you want to resume them."
@@ -114,9 +139,12 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		} else {
 			response = "Job alerts are not active. Use /subscribe to enable them."
 		}
-	case "/help":
-		response = greenhouseHelp()
 	case "/greenhouse":
+		if strings.TrimSpace(args) == "" {
+			session := b.beginCreationSession()
+			b.sendScreen(ctx, message.Chat.ID, creationPromptScreen(session, ""))
+			return
+		}
 		name, filters, err := parseGreenhouseArgs(args)
 		if err != nil {
 			response = err.Error() + "\n\n" + greenhouseUsage()
@@ -128,23 +156,15 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			response = "Could not save the Greenhouse search: " + err.Error()
 			break
 		}
-		response = fmt.Sprintf(
-			"Saved Greenhouse search %q.\nBoard: %s\nLocation: %s\nTitle must contain: %s\n\nRun /search %s to check it now.",
-			query.Name,
-			query.Filters.BoardToken,
-			valueOrAny(query.Filters.Location),
-			wordsOrAny(query.Filters.TitleWords),
-			query.Name,
-		)
+		b.clearCreationSession()
+		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(query))
+		return
 	case "/queries":
-		queries, err := b.queryStore.ListGreenhouse(ctx)
-		if err != nil {
-			b.logger.Error("list search queries", "error", err)
-			response = "Could not list search queries: " + err.Error()
-			break
-		}
-		response = formatQueries(queries)
+		b.clearCreationSession()
+		b.sendQueryList(ctx, message.Chat.ID)
+		return
 	case "/search":
+		b.clearCreationSession()
 		if strings.TrimSpace(args) == "" {
 			response = "Query name is required. Usage: /search <name>"
 			break
@@ -161,7 +181,12 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			response = "Greenhouse search failed: " + err.Error()
 			break
 		}
-		response = formatSearchResults(query.Name, found)
+		b.sendScreen(ctx, message.Chat.ID, searchResultsScreen(query, found))
+		return
+	case "/cancel":
+		b.clearCreationSession()
+		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
+		return
 	default:
 		return
 	}
@@ -213,45 +238,6 @@ func parseGreenhouseArgs(args string) (string, greenhouse.Filters, error) {
 
 func greenhouseUsage() string {
 	return "Usage:\n/greenhouse <name> | <board token> | <location> | <comma-separated title words>\n\nExample:\n/greenhouse Point72 SWE Internship 2027 | point72 | Warsaw, Poland | 2027, Internship, Software"
-}
-
-func greenhouseHelp() string {
-	return "Commands:\n/greenhouse - save or update a Greenhouse search\n/queries - list saved searches\n/search <name> - run one saved search now\n/subscribe - enable future alert delivery\n/stop - pause future alert delivery\n/status - show alert delivery status\n/help - show this message\n\n" + greenhouseUsage()
-}
-
-func formatQueries(queries []searchqueries.GreenhouseQuery) string {
-	if len(queries) == 0 {
-		return "No Greenhouse searches are saved.\n\n" + greenhouseUsage()
-	}
-	var builder strings.Builder
-	builder.WriteString("Saved Greenhouse searches:")
-	for _, query := range queries {
-		fmt.Fprintf(&builder, "\n\n%s\n%s · %s\nTitle: %s", query.Name, query.Filters.BoardToken, valueOrAny(query.Filters.Location), wordsOrAny(query.Filters.TitleWords))
-	}
-	return builder.String()
-}
-
-func formatSearchResults(name string, found []jobs.Job) string {
-	if len(found) == 0 {
-		return fmt.Sprintf("Search %q found no matching open jobs.", name)
-	}
-
-	const maxResults = 10
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "Search %q found %d matching open job(s):", name, len(found))
-	for i, job := range found {
-		if i == maxResults {
-			fmt.Fprintf(&builder, "\n\n…and %d more.", len(found)-maxResults)
-			break
-		}
-		fmt.Fprintf(&builder, "\n\n%s\n%s\n%s", job.Title, job.Location, job.URL)
-	}
-	result := builder.String()
-	runes := []rune(result)
-	if len(runes) > 4096 {
-		return string(runes[:4093]) + "..."
-	}
-	return result
 }
 
 func valueOrAny(value string) string {

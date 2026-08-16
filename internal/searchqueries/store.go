@@ -38,6 +38,9 @@ func (s *Store) SaveGreenhouse(ctx context.Context, name string, filters greenho
 	if name == "" {
 		return GreenhouseQuery{}, errors.New("query name is required")
 	}
+	if len([]rune(name)) > 100 {
+		return GreenhouseQuery{}, errors.New("query name must be 100 characters or fewer")
+	}
 	filters, err := filters.Normalize()
 	if err != nil {
 		return GreenhouseQuery{}, err
@@ -64,6 +67,28 @@ func (s *Store) GetGreenhouse(ctx context.Context, name string) (GreenhouseQuery
 		return GreenhouseQuery{}, fmt.Errorf("get search query: %w", err)
 	}
 	return decodeGreenhouse(row)
+}
+
+func (s *Store) GetGreenhouseByID(ctx context.Context, id int64) (GreenhouseQuery, error) {
+	row, err := s.queries.GetSearchQueryByID(ctx, db.GetSearchQueryByIDParams{
+		ID:         id,
+		SourceType: string(SourceGreenhouse),
+	})
+	if err != nil {
+		return GreenhouseQuery{}, fmt.Errorf("get Greenhouse search query: %w", err)
+	}
+	return decodeGreenhouse(row)
+}
+
+func (s *Store) DeleteGreenhouse(ctx context.Context, id int64) (bool, error) {
+	deleted, err := s.queries.DeleteSearchQueryByID(ctx, db.DeleteSearchQueryByIDParams{
+		ID:         id,
+		SourceType: string(SourceGreenhouse),
+	})
+	if err != nil {
+		return false, fmt.Errorf("delete Greenhouse search query: %w", err)
+	}
+	return deleted == 1, nil
 }
 
 func (s *Store) ListGreenhouse(ctx context.Context) ([]GreenhouseQuery, error) {

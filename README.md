@@ -6,7 +6,8 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
 
 - Typed Greenhouse filters for board token, exact location, and title words
 - Persistent search queries with common columns and source-specific JSONB filters
-- `/greenhouse`, `/queries`, and one-shot `/search` Telegram commands
+- Inline-keyboard menus for creating, listing, running, and deleting searches
+- `/greenhouse`, `/queries`, and one-shot `/search` command fallbacks
 - Access restricted to one configured Telegram chat ID
 - PostgreSQL 18 in Compose, pgx v5 pooling, and sqlc-generated query code
 - A provider-independent `jobs.Job` result model
@@ -34,6 +35,18 @@ make run
 ```
 
 ## Greenhouse searches
+
+Send `/start` or `/menu` to open the button interface:
+
+1. Choose **Add search query**.
+2. Enter a name, Greenhouse board token, location, and title words in the guided form.
+3. Review the typed filters and choose **Save search**.
+
+Choose **Search queries** to see saved searches. Selecting one opens its details with **Run query** and **Delete** buttons. Deletion requires confirmation and permanently removes the row from PostgreSQL.
+
+The creation flow is kept in memory while it is in progress; only a completed search is persisted. `/cancel` abandons the current draft.
+
+The compact command form remains available as a fallback.
 
 Save the Point72 example with this Telegram command:
 
