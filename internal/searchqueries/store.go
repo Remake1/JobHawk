@@ -10,16 +10,40 @@ import (
 
 	"jobhawk/internal/database/db"
 	"jobhawk/internal/greenhouse"
+	"jobhawk/internal/workday"
 )
 
 type SourceType string
 
-const SourceGreenhouse SourceType = "greenhouse"
+const (
+	SourceGreenhouse SourceType = "greenhouse"
+	SourceWorkday    SourceType = "workday"
+)
+
+type Query struct {
+	ID         int64
+	Name       string
+	SourceType SourceType
+	Greenhouse *greenhouse.Filters
+	Workday    *workday.Filters
+	Enabled    bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
 
 type GreenhouseQuery struct {
 	ID        int64
 	Name      string
 	Filters   greenhouse.Filters
+	Enabled   bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type WorkdayQuery struct {
+	ID        int64
+	Name      string
+	Filters   workday.Filters
 	Enabled   bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -34,14 +58,11 @@ func NewStore(queries *db.Queries) *Store {
 }
 
 func (s *Store) SaveGreenhouse(ctx context.Context, name string, filters greenhouse.Filters) (GreenhouseQuery, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return GreenhouseQuery{}, errors.New("query name is required")
+	name, err := normalizeName(name)
+	if err != nil {
+		return GreenhouseQuery{}, err
 	}
-	if len([]rune(name)) > 100 {
-		return GreenhouseQuery{}, errors.New("query name must be 100 characters or fewer")
-	}
-	filters, err := filters.Normalize()
+	filters, err = filters.Normalize()
 	if err != nil {
 		return GreenhouseQuery{}, err
 	}
@@ -59,6 +80,81 @@ func (s *Store) SaveGreenhouse(ctx context.Context, name string, filters greenho
 		return GreenhouseQuery{}, fmt.Errorf("save Greenhouse search query: %w", err)
 	}
 	return decodeGreenhouse(row)
+}
+
+func (s *Store) SaveWorkday(ctx context.Context, name string, filters workday.Filters) (WorkdayQuery, error) {
+	name, err := normalizeName(name)
+	if err != nil {
+		return WorkdayQuery{}, err
+	}
+	filters, err = filters.Normalize()
+	if err != nil {
+		return WorkdayQuery{}, err
+	}
+	payload, err := json.Marshal(filters)
+	if err != nil {
+		return WorkdayQuery{}, fmt.Errorf("encode Workday filters: %w", err)
+	}
+	row, err := s.queries.UpsertSearchQuery(ctx, db.UpsertSearchQueryParams{
+		Name:       name,
+		SourceType: string(SourceWorkday),
+		Filters:    payload,
+	})
+	if err != nil {
+		return WorkdayQuery{}, fmt.Errorf("save Workday search query: %w", err)
+	}
+	return decodeWorkday(row)
+}
+
+func normalizeName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("query name is required")
+	}
+	if len([]rune(name)) > 100 {
+		return "", errors.New("query name must be 100 characters or fewer")
+	}
+	return name, nil
+}
+
+func (s *Store) Get(ctx context.Context, name string) (Query, error) {
+	row, err := s.queries.GetSearchQueryByName(ctx, strings.TrimSpace(name))
+	if err != nil {
+		return Query{}, fmt.Errorf("get search query: %w", err)
+	}
+	return decodeQuery(row)
+}
+
+func (s *Store) GetByID(ctx context.Context, id int64) (Query, error) {
+	row, err := s.queries.GetSearchQueryByAnyID(ctx, id)
+	if err != nil {
+		return Query{}, fmt.Errorf("get search query: %w", err)
+	}
+	return decodeQuery(row)
+}
+
+func (s *Store) List(ctx context.Context) ([]Query, error) {
+	rows, err := s.queries.ListSearchQueries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list search queries: %w", err)
+	}
+	result := make([]Query, 0, len(rows))
+	for _, row := range rows {
+		query, err := decodeQuery(row)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, query)
+	}
+	return result, nil
+}
+
+func (s *Store) Delete(ctx context.Context, id int64) (bool, error) {
+	deleted, err := s.queries.DeleteSearchQueryByAnyID(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("delete search query: %w", err)
+	}
+	return deleted == 1, nil
 }
 
 func (s *Store) GetGreenhouse(ctx context.Context, name string) (GreenhouseQuery, error) {
@@ -131,4 +227,54 @@ func decodeGreenhouse(row db.SearchQuery) (GreenhouseQuery, error) {
 		CreatedAt: row.CreatedAt.Time,
 		UpdatedAt: row.UpdatedAt.Time,
 	}, nil
+}
+
+func decodeWorkday(row db.SearchQuery) (WorkdayQuery, error) {
+	if SourceType(row.SourceType) != SourceWorkday {
+		return WorkdayQuery{}, fmt.Errorf("query %q has source type %q, not %q", row.Name, row.SourceType, SourceWorkday)
+	}
+	var filters workday.Filters
+	if err := json.Unmarshal(row.Filters, &filters); err != nil {
+		return WorkdayQuery{}, fmt.Errorf("decode filters for query %q: %w", row.Name, err)
+	}
+	filters, err := filters.Normalize()
+	if err != nil {
+		return WorkdayQuery{}, fmt.Errorf("validate filters for query %q: %w", row.Name, err)
+	}
+	return WorkdayQuery{
+		ID:        row.ID,
+		Name:      row.Name,
+		Filters:   filters,
+		Enabled:   row.Enabled,
+		CreatedAt: row.CreatedAt.Time,
+		UpdatedAt: row.UpdatedAt.Time,
+	}, nil
+}
+
+func decodeQuery(row db.SearchQuery) (Query, error) {
+	query := Query{
+		ID:         row.ID,
+		Name:       row.Name,
+		SourceType: SourceType(row.SourceType),
+		Enabled:    row.Enabled,
+		CreatedAt:  row.CreatedAt.Time,
+		UpdatedAt:  row.UpdatedAt.Time,
+	}
+	switch query.SourceType {
+	case SourceGreenhouse:
+		decoded, err := decodeGreenhouse(row)
+		if err != nil {
+			return Query{}, err
+		}
+		query.Greenhouse = &decoded.Filters
+	case SourceWorkday:
+		decoded, err := decodeWorkday(row)
+		if err != nil {
+			return Query{}, err
+		}
+		query.Workday = &decoded.Filters
+	default:
+		return Query{}, fmt.Errorf("query %q has unsupported source type %q", row.Name, row.SourceType)
+	}
+	return query, nil
 }

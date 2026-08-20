@@ -14,6 +14,7 @@ import (
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/searchqueries"
 	telegrambot "jobhawk/internal/telegram"
+	"jobhawk/internal/workday"
 )
 
 func main() {
@@ -40,11 +41,13 @@ func main() {
 
 	queryStore := searchqueries.NewStore(db.New(pool))
 	greenhouseClient := greenhouse.NewClient(nil)
-	bot, err := telegrambot.New(
+	workdayClient := workday.NewClient(nil)
+	bot, err := telegrambot.NewWithWorkday(
 		cfg.TelegramBotToken,
 		cfg.TelegramChatID,
 		queryStore,
 		greenhouseClient,
+		workdayClient,
 		logger,
 	)
 	if err != nil {

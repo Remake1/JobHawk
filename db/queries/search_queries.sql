@@ -17,6 +17,11 @@ SELECT *
 FROM search_queries
 WHERE id = $1 AND source_type = $2;
 
+-- name: GetSearchQueryByAnyID :one
+SELECT *
+FROM search_queries
+WHERE id = $1;
+
 -- name: ListSearchQueries :many
 SELECT *
 FROM search_queries
@@ -25,3 +30,7 @@ ORDER BY name;
 -- name: DeleteSearchQueryByID :execrows
 DELETE FROM search_queries
 WHERE id = $1 AND source_type = $2;
+
+-- name: DeleteSearchQueryByAnyID :execrows
+DELETE FROM search_queries
+WHERE id = $1;

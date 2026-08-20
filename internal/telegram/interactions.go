@@ -10,12 +10,15 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 
 	"jobhawk/internal/greenhouse"
+	"jobhawk/internal/searchqueries"
+	"jobhawk/internal/workday"
 )
 
 type creationStep uint8
 
 const (
-	creationName creationStep = iota + 1
+	creationSource creationStep = iota + 1
+	creationName
 	creationBoard
 	creationLocation
 	creationTitleWords
@@ -23,8 +26,10 @@ const (
 )
 
 type creationDraft struct {
-	Name string
-	greenhouse.Filters
+	Name       string
+	SourceType searchqueries.SourceType
+	Greenhouse greenhouse.Filters
+	Workday    workday.Filters
 }
 
 type creationSession struct {
@@ -35,7 +40,14 @@ type creationSession struct {
 func (b *Bot) beginCreationSession() creationSession {
 	b.creationMu.Lock()
 	defer b.creationMu.Unlock()
-	b.creation = &creationSession{step: creationName}
+	b.creation = &creationSession{step: creationSource}
+	return *b.creation
+}
+
+func (b *Bot) beginProviderCreation(source searchqueries.SourceType) creationSession {
+	b.creationMu.Lock()
+	defer b.creationMu.Unlock()
+	b.creation = &creationSession{step: creationName, draft: creationDraft{SourceType: source}}
 	return *b.creation
 }
 
@@ -94,13 +106,26 @@ func (b *Bot) handleCreationInput(ctx context.Context, chatID int64, input strin
 			return nil
 		})
 	case creationBoard:
-		boardToken, validationErr := greenhouse.NormalizeBoardToken(input)
-		if validationErr != nil {
-			b.sendScreen(ctx, chatID, creationPromptScreen(session, validationErr.Error()))
-			return
+		var greenhouseFilters greenhouse.Filters
+		var workdayFilters workday.Filters
+		if session.draft.SourceType == searchqueries.SourceWorkday {
+			host, tenant, site, validationErr := workday.ParseJobURL(input)
+			if validationErr != nil {
+				b.sendScreen(ctx, chatID, creationPromptScreen(session, validationErr.Error()))
+				return
+			}
+			workdayFilters = workday.Filters{Host: host, Tenant: tenant, Site: site}
+		} else {
+			boardToken, validationErr := greenhouse.NormalizeBoardToken(input)
+			if validationErr != nil {
+				b.sendScreen(ctx, chatID, creationPromptScreen(session, validationErr.Error()))
+				return
+			}
+			greenhouseFilters = greenhouse.Filters{BoardToken: boardToken}
 		}
 		next, err = b.updateCreationSession(creationBoard, func(current *creationSession) error {
-			current.draft.BoardToken = boardToken
+			current.draft.Greenhouse = greenhouseFilters
+			current.draft.Workday = workdayFilters
 			current.step = creationLocation
 			return nil
 		})
@@ -111,23 +136,27 @@ func (b *Bot) handleCreationInput(ctx context.Context, chatID int64, input strin
 			return
 		}
 		next, err = b.updateCreationSession(creationLocation, func(current *creationSession) error {
-			current.draft.Location = location
+			if current.draft.SourceType == searchqueries.SourceWorkday {
+				current.draft.Workday.Location = location
+			} else {
+				current.draft.Greenhouse.Location = location
+			}
 			current.step = creationTitleWords
 			return nil
 		})
 	case creationTitleWords:
 		words := parseTitleWords(input)
-		filters, validationErr := (greenhouse.Filters{
-			BoardToken: session.draft.BoardToken,
-			Location:   session.draft.Location,
-			TitleWords: words,
-		}).Normalize()
+		validationErr := normalizeDraftFilters(&session.draft, words)
 		if validationErr != nil {
 			b.sendScreen(ctx, chatID, creationPromptScreen(session, validationErr.Error()))
 			return
 		}
 		next, err = b.updateCreationSession(creationTitleWords, func(current *creationSession) error {
-			current.draft.Filters = filters
+			if current.draft.SourceType == searchqueries.SourceWorkday {
+				current.draft.Workday = session.draft.Workday
+			} else {
+				current.draft.Greenhouse = session.draft.Greenhouse
+			}
 			current.step = creationReview
 			return nil
 		})
@@ -172,7 +201,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		next = mainMenuScreen()
 	case callbackList:
 		b.clearCreationSession()
-		queries, err := b.queryStore.ListGreenhouse(ctx)
+		queries, err := b.queryStore.List(ctx)
 		if err != nil {
 			b.callbackFailure(ctx, query, "Could not load search queries.", err)
 			return
@@ -180,15 +209,28 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		next = queryListScreen(queries)
 	case callbackAdd:
 		next = creationPromptScreen(b.beginCreationSession(), "")
+	case callbackGreenhouse:
+		next = creationPromptScreen(b.beginProviderCreation(searchqueries.SourceGreenhouse), "")
+	case callbackWorkday:
+		next = creationPromptScreen(b.beginProviderCreation(searchqueries.SourceWorkday), "")
 	case callbackCancel:
 		b.clearCreationSession()
 		next = mainMenuScreen()
 		toast = "Creation cancelled"
 	case callbackRestart:
-		next = creationPromptScreen(b.beginCreationSession(), "")
+		session, ok := b.creationSessionSnapshot()
+		if !ok || (session.draft.SourceType != searchqueries.SourceGreenhouse && session.draft.SourceType != searchqueries.SourceWorkday) {
+			next = creationPromptScreen(b.beginCreationSession(), "")
+		} else {
+			next = creationPromptScreen(b.beginProviderCreation(session.draft.SourceType), "")
+		}
 	case callbackSkipLoc:
 		session, err := b.updateCreationSession(creationLocation, func(current *creationSession) error {
-			current.draft.Location = ""
+			if current.draft.SourceType == searchqueries.SourceWorkday {
+				current.draft.Workday.Location = ""
+			} else {
+				current.draft.Greenhouse.Location = ""
+			}
 			current.step = creationTitleWords
 			return nil
 		})
@@ -199,14 +241,9 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		next = creationPromptScreen(session, "")
 	case callbackSkipTitle:
 		session, err := b.updateCreationSession(creationTitleWords, func(current *creationSession) error {
-			filters, validationErr := (greenhouse.Filters{
-				BoardToken: current.draft.BoardToken,
-				Location:   current.draft.Location,
-			}).Normalize()
-			if validationErr != nil {
+			if validationErr := normalizeDraftFilters(&current.draft, nil); validationErr != nil {
 				return validationErr
 			}
-			current.draft.Filters = filters
 			current.step = creationReview
 			return nil
 		})
@@ -221,10 +258,21 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 			b.answerCallback(ctx, query.ID, "This draft has expired. Start a new search.", true)
 			return
 		}
-		saved, err := b.queryStore.SaveGreenhouse(ctx, session.draft.Name, session.draft.Filters)
-		if err != nil {
-			b.callbackFailure(ctx, query, "Could not save the search.", err)
-			return
+		var saved searchqueries.Query
+		if session.draft.SourceType == searchqueries.SourceWorkday {
+			workdayQuery, err := b.queryStore.SaveWorkday(ctx, session.draft.Name, session.draft.Workday)
+			if err != nil {
+				b.callbackFailure(ctx, query, "Could not save the search.", err)
+				return
+			}
+			saved = queryFromWorkday(workdayQuery)
+		} else {
+			greenhouseQuery, err := b.queryStore.SaveGreenhouse(ctx, session.draft.Name, session.draft.Greenhouse)
+			if err != nil {
+				b.callbackFailure(ctx, query, "Could not save the search.", err)
+				return
+			}
+			saved = queryFromGreenhouse(greenhouseQuery)
 		}
 		b.clearCreationSession()
 		next = queryDetailScreen(saved)
@@ -236,7 +284,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 			return
 		}
 		b.clearCreationSession()
-		queryRecord, err := b.queryStore.GetGreenhouseByID(ctx, id)
+		queryRecord, err := b.queryStore.GetByID(ctx, id)
 		if err != nil {
 			b.callbackFailure(ctx, query, "That search no longer exists.", err)
 			return
@@ -245,9 +293,9 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		case "view":
 			next = queryDetailScreen(queryRecord)
 		case "run":
-			found, searchErr := b.greenhouseSearcher.Search(ctx, queryRecord.Filters)
+			found, searchErr := b.runQuery(ctx, queryRecord)
 			if searchErr != nil {
-				b.callbackFailure(ctx, query, "Greenhouse search failed.", searchErr)
+				b.callbackFailure(ctx, query, sourceLabel(queryRecord.SourceType)+" search failed.", searchErr)
 				return
 			}
 			next = searchResultsScreen(queryRecord, found)
@@ -255,12 +303,12 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		case "delete":
 			next = deleteConfirmationScreen(queryRecord)
 		case "confirm_delete":
-			deleted, deleteErr := b.queryStore.DeleteGreenhouse(ctx, queryRecord.ID)
+			deleted, deleteErr := b.queryStore.Delete(ctx, queryRecord.ID)
 			if deleteErr != nil {
 				b.callbackFailure(ctx, query, "Could not delete the search.", deleteErr)
 				return
 			}
-			queries, listErr := b.queryStore.ListGreenhouse(ctx)
+			queries, listErr := b.queryStore.List(ctx)
 			if listErr != nil {
 				b.callbackFailure(ctx, query, "Search was deleted, but the list could not be refreshed.", listErr)
 				return
@@ -283,7 +331,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 }
 
 func (b *Bot) sendQueryList(ctx context.Context, chatID int64) {
-	queries, err := b.queryStore.ListGreenhouse(ctx)
+	queries, err := b.queryStore.List(ctx)
 	if err != nil {
 		b.logger.Error("list search queries", "error", err)
 		b.sendText(ctx, chatID, "Could not load search queries.")
@@ -341,4 +389,53 @@ func parseTitleWords(input string) []string {
 		return strings.Split(input, ",")
 	}
 	return strings.Fields(input)
+}
+
+func normalizeDraftFilters(draft *creationDraft, titleWords []string) error {
+	if draft.SourceType == searchqueries.SourceWorkday {
+		filters := draft.Workday
+		filters.TitleWords = titleWords
+		normalized, err := filters.Normalize()
+		if err != nil {
+			return err
+		}
+		draft.Workday = normalized
+		return nil
+	}
+	filters := draft.Greenhouse
+	filters.TitleWords = titleWords
+	normalized, err := filters.Normalize()
+	if err != nil {
+		return err
+	}
+	draft.Greenhouse = normalized
+	return nil
+}
+
+func queryFromDraft(draft creationDraft) searchqueries.Query {
+	query := searchqueries.Query{Name: draft.Name, SourceType: draft.SourceType}
+	if draft.SourceType == searchqueries.SourceWorkday {
+		filters := draft.Workday
+		query.Workday = &filters
+	} else {
+		filters := draft.Greenhouse
+		query.Greenhouse = &filters
+	}
+	return query
+}
+
+func queryFromGreenhouse(query searchqueries.GreenhouseQuery) searchqueries.Query {
+	filters := query.Filters
+	return searchqueries.Query{
+		ID: query.ID, Name: query.Name, SourceType: searchqueries.SourceGreenhouse,
+		Greenhouse: &filters, Enabled: query.Enabled, CreatedAt: query.CreatedAt, UpdatedAt: query.UpdatedAt,
+	}
+}
+
+func queryFromWorkday(query searchqueries.WorkdayQuery) searchqueries.Query {
+	filters := query.Filters
+	return searchqueries.Query{
+		ID: query.ID, Name: query.Name, SourceType: searchqueries.SourceWorkday,
+		Workday: &filters, Enabled: query.Enabled, CreatedAt: query.CreatedAt, UpdatedAt: query.UpdatedAt,
+	}
 }

@@ -35,3 +35,36 @@ func TestDecodeGreenhouseRejectsAnotherSource(t *testing.T) {
 		t.Fatal("decodeGreenhouse() expected a source type error")
 	}
 }
+
+func TestDecodeWorkday(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	query, err := decodeWorkday(db.SearchQuery{
+		ID:         8,
+		Name:       "State Street Poland",
+		SourceType: "workday",
+		Filters:    json.RawMessage(`{"host":"statestreet.wd1.myworkdayjobs.com","tenant":"statestreet","site":"Global","location":"Poland","title_words":["Working","Student"]}`),
+		Enabled:    true,
+		CreatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("decodeWorkday() error = %v", err)
+	}
+	if query.ID != 8 || query.Filters.Site != "Global" || query.Filters.Location != "Poland" {
+		t.Fatalf("decodeWorkday() = %+v", query)
+	}
+}
+
+func TestDecodeQuerySelectsWorkday(t *testing.T) {
+	query, err := decodeQuery(db.SearchQuery{
+		Name:       "Workday",
+		SourceType: "workday",
+		Filters:    json.RawMessage(`{"host":"tenant.wd1.myworkdayjobs.com","tenant":"tenant","site":"Global","location":"Poland"}`),
+	})
+	if err != nil {
+		t.Fatalf("decodeQuery() error = %v", err)
+	}
+	if query.SourceType != SourceWorkday || query.Workday == nil || query.Greenhouse != nil {
+		t.Fatalf("decodeQuery() = %+v", query)
+	}
+}

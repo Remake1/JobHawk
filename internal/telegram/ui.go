@@ -13,14 +13,16 @@ import (
 )
 
 const (
-	callbackHome      = "m:home"
-	callbackList      = "m:list"
-	callbackAdd       = "m:add"
-	callbackCancel    = "w:cancel"
-	callbackSkipLoc   = "w:skiploc"
-	callbackSkipTitle = "w:skiptitle"
-	callbackSave      = "w:save"
-	callbackRestart   = "w:restart"
+	callbackHome       = "m:home"
+	callbackList       = "m:list"
+	callbackAdd        = "m:add"
+	callbackCancel     = "w:cancel"
+	callbackSkipLoc    = "w:skiploc"
+	callbackSkipTitle  = "w:skiptitle"
+	callbackSave       = "w:save"
+	callbackRestart    = "w:restart"
+	callbackGreenhouse = "w:greenhouse"
+	callbackWorkday    = "w:workday"
 )
 
 type screen struct {
@@ -50,7 +52,7 @@ func mainMenuScreen() screen {
 	)
 }
 
-func queryListScreen(queries []searchqueries.GreenhouseQuery) screen {
+func queryListScreen(queries []searchqueries.Query) screen {
 	rows := make([][]telego.InlineKeyboardButton, 0, len(queries)+2)
 	for _, query := range queries {
 		rows = append(rows, tu.InlineKeyboardRow(callbackButton(
@@ -77,7 +79,7 @@ func queryListScreen(queries []searchqueries.GreenhouseQuery) screen {
 	)
 }
 
-func queryDetailScreen(query searchqueries.GreenhouseQuery) screen {
+func queryDetailScreen(query searchqueries.Query) screen {
 	keyboard := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
 			callbackButton("▶ Run query", queryCallback("run", query.ID)),
@@ -88,7 +90,7 @@ func queryDetailScreen(query searchqueries.GreenhouseQuery) screen {
 	return formattedScreen(keyboard, querySummaryParts(query)...)
 }
 
-func deleteConfirmationScreen(query searchqueries.GreenhouseQuery) screen {
+func deleteConfirmationScreen(query searchqueries.Query) screen {
 	keyboard := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(callbackButton("🗑 Yes, delete", queryCallback("confirm_delete", query.ID))),
 		tu.InlineKeyboardRow(callbackButton("Cancel", queryCallback("view", query.ID))),
@@ -102,7 +104,7 @@ func deleteConfirmationScreen(query searchqueries.GreenhouseQuery) screen {
 	)
 }
 
-func searchResultsScreen(query searchqueries.GreenhouseQuery, found []jobs.Job) screen {
+func searchResultsScreen(query searchqueries.Query, found []jobs.Job) screen {
 	keyboard := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(callbackButton("↻ Run again", queryCallback("run", query.ID))),
 		tu.InlineKeyboardRow(callbackButton("← Query details", queryCallback("view", query.ID))),
@@ -147,27 +149,43 @@ func creationPromptScreen(session creationSession, validationError string) scree
 	var title, instruction string
 	rows := make([][]telego.InlineKeyboardButton, 0, 2)
 	switch session.step {
+	case creationSource:
+		title = "Choose a job board"
+		instruction = "Select the source for this saved search."
+		rows = append(rows,
+			tu.InlineKeyboardRow(callbackButton("Greenhouse", callbackGreenhouse)),
+			tu.InlineKeyboardRow(callbackButton("Workday", callbackWorkday)),
+		)
 	case creationName:
 		title = "Step 1 of 4 — Name"
-		instruction = "Give this search a short, recognizable name.\n\nExample: Point72 SWE Internship 2027"
+		instruction = "Give this search a short, recognizable name.\n\nExample: " + creationNameExample(session.draft.SourceType)
 	case creationBoard:
-		title = "Step 2 of 4 — Greenhouse board"
-		instruction = "Enter the board token from the Greenhouse URL.\n\nExample: point72"
+		if session.draft.SourceType == searchqueries.SourceWorkday {
+			title = "Step 2 of 4 — Workday job URL"
+			instruction = "Paste any public job URL from the Workday site you want to search.\n\nExample: https://statestreet.wd1.myworkdayjobs.com/Global/job/Munich-Germany/Working-Student_R-795614-1/apply"
+		} else {
+			title = "Step 2 of 4 — Greenhouse board"
+			instruction = "Enter the board token from the Greenhouse URL.\n\nExample: point72"
+		}
 	case creationLocation:
 		title = "Step 3 of 4 — Location"
-		instruction = "Enter the exact location shown by Greenhouse.\n\nExample: Warsaw, Poland"
+		if session.draft.SourceType == searchqueries.SourceWorkday {
+			instruction = "Enter text that must occur anywhere in the Workday location.\n\nExample: Poland matches Krakow, Poland"
+		} else {
+			instruction = "Enter the exact location shown by Greenhouse.\n\nExample: Warsaw, Poland"
+		}
 		rows = append(rows, tu.InlineKeyboardRow(callbackButton("Skip location", callbackSkipLoc)))
 	case creationTitleWords:
 		title = "Step 4 of 4 — Title words"
 		instruction = "Enter comma-separated words that must all occur in the job title.\n\nExample: 2027, Internship, Software"
-		if session.draft.Location != "" {
+		if draftLocation(session.draft) != "" {
 			rows = append(rows, tu.InlineKeyboardRow(callbackButton("Skip title words", callbackSkipTitle)))
 		}
 	}
 	rows = append(rows, tu.InlineKeyboardRow(callbackButton("Cancel", callbackCancel)))
 
 	parts := []tu.MessageEntityCollection{
-		tu.Entity("New Greenhouse search").Bold(),
+		tu.Entity("New " + sourceLabel(session.draft.SourceType) + " search").Bold(),
 		tu.Entity("\n"),
 		tu.Entity(title).Italic(),
 		tu.Entity("\n\n" + instruction),
@@ -178,8 +196,15 @@ func creationPromptScreen(session creationSession, validationError string) scree
 	return formattedScreen(tu.InlineKeyboard(rows...), parts...)
 }
 
+func draftLocation(draft creationDraft) string {
+	if draft.SourceType == searchqueries.SourceWorkday {
+		return draft.Workday.Location
+	}
+	return draft.Greenhouse.Location
+}
+
 func creationReviewScreen(session creationSession) screen {
-	query := searchqueries.GreenhouseQuery{Name: session.draft.Name, Filters: session.draft.Filters}
+	query := queryFromDraft(session.draft)
 	parts := []tu.MessageEntityCollection{
 		tu.Entity("Review new search").Bold(),
 		tu.Entity("\n\nName\n"),
@@ -196,18 +221,57 @@ func creationReviewScreen(session creationSession) screen {
 	return formattedScreen(keyboard, parts...)
 }
 
-func querySummaryParts(query searchqueries.GreenhouseQuery) []tu.MessageEntityCollection {
-	return []tu.MessageEntityCollection{
+func querySummaryParts(query searchqueries.Query) []tu.MessageEntityCollection {
+	parts := []tu.MessageEntityCollection{
 		tu.Entity(query.Name).Bold(),
 		tu.Entity("\n\nSource\n"),
-		tu.Entity("Greenhouse").Code(),
-		tu.Entity("\n\nBoard\n"),
-		tu.Entity(query.Filters.BoardToken).Code(),
-		tu.Entity("\n\nLocation\n"),
-		tu.Entity(valueOrAny(query.Filters.Location)).Code(),
-		tu.Entity("\n\nTitle contains every word\n"),
-		tu.Entity(wordsOrAny(query.Filters.TitleWords)).Code(),
+		tu.Entity(sourceLabel(query.SourceType)).Code(),
 	}
+	switch query.SourceType {
+	case searchqueries.SourceGreenhouse:
+		if query.Greenhouse == nil {
+			return append(parts, tu.Entity("\n\nInvalid Greenhouse filters").Bold())
+		}
+		parts = append(parts,
+			tu.Entity("\n\nBoard\n"),
+			tu.Entity(query.Greenhouse.BoardToken).Code(),
+			tu.Entity("\n\nLocation\n"),
+			tu.Entity(valueOrAny(query.Greenhouse.Location)).Code(),
+			tu.Entity("\n\nTitle contains every word\n"),
+			tu.Entity(wordsOrAny(query.Greenhouse.TitleWords)).Code(),
+		)
+	case searchqueries.SourceWorkday:
+		if query.Workday == nil {
+			return append(parts, tu.Entity("\n\nInvalid Workday filters").Bold())
+		}
+		parts = append(parts,
+			tu.Entity("\n\nSite\n"),
+			tu.Entity(query.Workday.Host+"/"+query.Workday.Site).Code(),
+			tu.Entity("\n\nLocation contains\n"),
+			tu.Entity(valueOrAny(query.Workday.Location)).Code(),
+			tu.Entity("\n\nTitle contains every word\n"),
+			tu.Entity(wordsOrAny(query.Workday.TitleWords)).Code(),
+		)
+	}
+	return parts
+}
+
+func sourceLabel(source searchqueries.SourceType) string {
+	switch source {
+	case searchqueries.SourceGreenhouse:
+		return "Greenhouse"
+	case searchqueries.SourceWorkday:
+		return "Workday"
+	default:
+		return "Job board"
+	}
+}
+
+func creationNameExample(source searchqueries.SourceType) string {
+	if source == searchqueries.SourceWorkday {
+		return "State Street Working Student"
+	}
+	return "Point72 SWE Internship 2027"
 }
 
 func queryCallback(action string, id int64) string {

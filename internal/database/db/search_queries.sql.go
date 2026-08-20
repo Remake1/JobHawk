@@ -10,6 +10,19 @@ import (
 	"encoding/json"
 )
 
+const deleteSearchQueryByAnyID = `-- name: DeleteSearchQueryByAnyID :execrows
+DELETE FROM search_queries
+WHERE id = $1
+`
+
+func (q *Queries) DeleteSearchQueryByAnyID(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSearchQueryByAnyID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSearchQueryByID = `-- name: DeleteSearchQueryByID :execrows
 DELETE FROM search_queries
 WHERE id = $1 AND source_type = $2
@@ -26,6 +39,27 @@ func (q *Queries) DeleteSearchQueryByID(ctx context.Context, arg DeleteSearchQue
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getSearchQueryByAnyID = `-- name: GetSearchQueryByAnyID :one
+SELECT id, name, source_type, filters, enabled, created_at, updated_at
+FROM search_queries
+WHERE id = $1
+`
+
+func (q *Queries) GetSearchQueryByAnyID(ctx context.Context, id int64) (SearchQuery, error) {
+	row := q.db.QueryRow(ctx, getSearchQueryByAnyID, id)
+	var i SearchQuery
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.SourceType,
+		&i.Filters,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getSearchQueryByID = `-- name: GetSearchQueryByID :one

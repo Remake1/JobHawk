@@ -15,18 +15,24 @@ import (
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
 	"jobhawk/internal/subscribers"
+	"jobhawk/internal/workday"
 )
 
 type queryStore interface {
 	SaveGreenhouse(context.Context, string, greenhouse.Filters) (searchqueries.GreenhouseQuery, error)
-	GetGreenhouse(context.Context, string) (searchqueries.GreenhouseQuery, error)
-	GetGreenhouseByID(context.Context, int64) (searchqueries.GreenhouseQuery, error)
-	ListGreenhouse(context.Context) ([]searchqueries.GreenhouseQuery, error)
-	DeleteGreenhouse(context.Context, int64) (bool, error)
+	SaveWorkday(context.Context, string, workday.Filters) (searchqueries.WorkdayQuery, error)
+	Get(context.Context, string) (searchqueries.Query, error)
+	GetByID(context.Context, int64) (searchqueries.Query, error)
+	List(context.Context) ([]searchqueries.Query, error)
+	Delete(context.Context, int64) (bool, error)
 }
 
 type greenhouseSearcher interface {
 	Search(context.Context, greenhouse.Filters) ([]jobs.Job, error)
+}
+
+type workdaySearcher interface {
+	Search(context.Context, workday.Filters) ([]jobs.Job, error)
 }
 
 type Bot struct {
@@ -35,6 +41,7 @@ type Bot struct {
 	allowedChatID      int64
 	queryStore         queryStore
 	greenhouseSearcher greenhouseSearcher
+	workdaySearcher    workdaySearcher
 	subscribers        *subscribers.Store
 	creationMu         sync.Mutex
 	creation           *creationSession
@@ -45,6 +52,17 @@ func New(
 	allowedChatID int64,
 	queryStore queryStore,
 	greenhouseSearcher greenhouseSearcher,
+	logger *slog.Logger,
+) (*Bot, error) {
+	return NewWithWorkday(token, allowedChatID, queryStore, greenhouseSearcher, workday.NewClient(nil), logger)
+}
+
+func NewWithWorkday(
+	token string,
+	allowedChatID int64,
+	queryStore queryStore,
+	greenhouseSearcher greenhouseSearcher,
+	workdaySearcher workdaySearcher,
 	logger *slog.Logger,
 ) (*Bot, error) {
 	api, err := telego.NewBot(token)
@@ -58,6 +76,7 @@ func New(
 		allowedChatID:      allowedChatID,
 		queryStore:         queryStore,
 		greenhouseSearcher: greenhouseSearcher,
+		workdaySearcher:    workdaySearcher,
 		subscribers:        subscribers.NewStore(),
 	}, nil
 }
@@ -141,7 +160,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		}
 	case "/greenhouse":
 		if strings.TrimSpace(args) == "" {
-			session := b.beginCreationSession()
+			session := b.beginProviderCreation(searchqueries.SourceGreenhouse)
 			b.sendScreen(ctx, message.Chat.ID, creationPromptScreen(session, ""))
 			return
 		}
@@ -157,7 +176,27 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			break
 		}
 		b.clearCreationSession()
-		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(query))
+		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromGreenhouse(query)))
+		return
+	case "/workday":
+		if strings.TrimSpace(args) == "" {
+			session := b.beginProviderCreation(searchqueries.SourceWorkday)
+			b.sendScreen(ctx, message.Chat.ID, creationPromptScreen(session, ""))
+			return
+		}
+		name, filters, err := parseWorkdayArgs(args)
+		if err != nil {
+			response = err.Error() + "\n\n" + workdayUsage()
+			break
+		}
+		saved, err := b.queryStore.SaveWorkday(ctx, name, filters)
+		if err != nil {
+			b.logger.Error("save Workday query", "name", name, "error", err)
+			response = "Could not save the Workday search: " + err.Error()
+			break
+		}
+		b.clearCreationSession()
+		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromWorkday(saved)))
 		return
 	case "/queries":
 		b.clearCreationSession()
@@ -169,16 +208,16 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			response = "Query name is required. Usage: /search <name>"
 			break
 		}
-		query, err := b.queryStore.GetGreenhouse(ctx, args)
+		query, err := b.queryStore.Get(ctx, args)
 		if err != nil {
-			b.logger.Error("load Greenhouse query", "name", args, "error", err)
-			response = "Could not load that Greenhouse search: " + err.Error()
+			b.logger.Error("load search query", "name", args, "error", err)
+			response = "Could not load that search: " + err.Error()
 			break
 		}
-		found, err := b.greenhouseSearcher.Search(ctx, query.Filters)
+		found, err := b.runQuery(ctx, query)
 		if err != nil {
-			b.logger.Error("run Greenhouse search", "name", query.Name, "error", err)
-			response = "Greenhouse search failed: " + err.Error()
+			b.logger.Error("run search", "name", query.Name, "source", query.SourceType, "error", err)
+			response = sourceLabel(query.SourceType) + " search failed: " + err.Error()
 			break
 		}
 		b.sendScreen(ctx, message.Chat.ID, searchResultsScreen(query, found))
@@ -238,6 +277,44 @@ func parseGreenhouseArgs(args string) (string, greenhouse.Filters, error) {
 
 func greenhouseUsage() string {
 	return "Usage:\n/greenhouse <name> | <board token> | <location> | <comma-separated title words>\n\nExample:\n/greenhouse Point72 SWE Internship 2027 | point72 | Warsaw, Poland | 2027, Internship, Software"
+}
+
+func parseWorkdayArgs(args string) (string, workday.Filters, error) {
+	parts := strings.Split(args, "|")
+	if len(parts) != 4 {
+		return "", workday.Filters{}, errors.New("expected four fields separated by |")
+	}
+	name := strings.TrimSpace(parts[0])
+	words := parseTitleWords(parts[3])
+	if name == "" {
+		return "", workday.Filters{}, errors.New("query name is required")
+	}
+	filters, err := workday.FiltersFromJobURL(parts[1], parts[2], words)
+	if err != nil {
+		return "", workday.Filters{}, err
+	}
+	return name, filters, nil
+}
+
+func workdayUsage() string {
+	return "Usage:\n/workday <name> | <Workday job URL> | <partial location> | <comma-separated title words>\n\nExample:\n/workday State Street Working Student | https://statestreet.wd1.myworkdayjobs.com/Global/job/Munich-Germany/Working-Student_R-795614-1/apply | Poland | Working, Student"
+}
+
+func (b *Bot) runQuery(ctx context.Context, query searchqueries.Query) ([]jobs.Job, error) {
+	switch query.SourceType {
+	case searchqueries.SourceGreenhouse:
+		if query.Greenhouse == nil {
+			return nil, errors.New("Greenhouse filters are missing")
+		}
+		return b.greenhouseSearcher.Search(ctx, *query.Greenhouse)
+	case searchqueries.SourceWorkday:
+		if query.Workday == nil {
+			return nil, errors.New("Workday filters are missing")
+		}
+		return b.workdaySearcher.Search(ctx, *query.Workday)
+	default:
+		return nil, fmt.Errorf("unsupported source %q", query.SourceType)
+	}
 }
 
 func valueOrAny(value string) string {
