@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/mymmrac/telego"
@@ -293,13 +292,15 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		case "view":
 			next = queryDetailScreen(queryRecord)
 		case "run":
-			found, searchErr := b.runQuery(ctx, queryRecord)
-			if searchErr != nil {
-				b.callbackFailure(ctx, query, sourceLabel(queryRecord.SourceType)+" search failed.", searchErr)
-				return
+			// Telegram callback queries must be acknowledged quickly. Workday can
+			// take long enough to make the callback expire, so update the menu and
+			// finish the provider request outside the update-processing loop.
+			b.answerCallback(ctx, query.ID, "Search started", false)
+			if err := b.editScreen(ctx, message, searchLoadingScreen(queryRecord)); err != nil {
+				b.logger.Error("show search progress", "query_id", queryRecord.ID, "error", err)
 			}
-			next = searchResultsScreen(queryRecord, found)
-			toast = fmt.Sprintf("Found %d job(s)", len(found))
+			go b.finishQuerySearch(ctx, message, queryRecord)
+			return
 		case "delete":
 			next = deleteConfirmationScreen(queryRecord)
 		case "confirm_delete":
@@ -340,14 +341,17 @@ func (b *Bot) sendQueryList(ctx context.Context, chatID int64) {
 	b.sendScreen(ctx, chatID, queryListScreen(queries))
 }
 
-func (b *Bot) sendScreen(ctx context.Context, chatID int64, value screen) {
+func (b *Bot) sendScreen(ctx context.Context, chatID int64, value screen) *telego.Message {
 	params := tu.Message(tu.ID(chatID), value.text).WithEntities(value.entities...)
 	if value.keyboard != nil {
 		params.WithReplyMarkup(value.keyboard)
 	}
-	if _, err := b.api.SendMessage(ctx, params); err != nil {
+	message, err := b.api.SendMessage(ctx, params)
+	if err != nil {
 		b.logger.Error("send bot screen", "chat_id", chatID, "error", err)
+		return nil
 	}
+	return message
 }
 
 func (b *Bot) sendText(ctx context.Context, chatID int64, text string) {
@@ -364,6 +368,19 @@ func (b *Bot) editScreen(ctx context.Context, message *telego.Message, value scr
 	}
 	_, err := b.api.EditMessageText(ctx, params)
 	return err
+}
+
+func (b *Bot) finishQuerySearch(ctx context.Context, message *telego.Message, query searchqueries.Query) {
+	found, err := b.runQuery(ctx, query)
+	result := searchResultsScreen(query, found)
+	if err != nil {
+		b.logger.Error("run search", "name", query.Name, "source", query.SourceType, "error", err)
+		result = searchErrorScreen(query)
+	}
+	if err := b.editScreen(ctx, message, result); err != nil {
+		b.logger.Error("show completed search", "query_id", query.ID, "error", err)
+		b.sendScreen(ctx, message.Chat.ID, result)
+	}
 }
 
 func (b *Bot) answerCallback(ctx context.Context, id, text string, alert bool) {

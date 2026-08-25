@@ -136,6 +136,28 @@ func searchResultsScreen(query searchqueries.Query, found []jobs.Job) screen {
 	return formattedScreen(keyboard, parts...)
 }
 
+func searchLoadingScreen(query searchqueries.Query) screen {
+	return formattedScreen(
+		nil,
+		tu.Entity(query.Name).Bold(),
+		tu.Entity("\n\n⏳ Searching "+sourceLabel(query.SourceType)+"…"),
+		tu.Entity("\n\nThis can take a while. This message will update automatically."),
+	)
+}
+
+func searchErrorScreen(query searchqueries.Query) screen {
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(callbackButton("↻ Try again", queryCallback("run", query.ID))),
+		tu.InlineKeyboardRow(callbackButton("← Query details", queryCallback("view", query.ID))),
+	)
+	return formattedScreen(
+		keyboard,
+		tu.Entity(query.Name).Bold(),
+		tu.Entity("\n\n⚠ "+sourceLabel(query.SourceType)+" search failed."),
+		tu.Entity("\n\nPlease try again in a moment."),
+	)
+}
+
 func truncateDisplayText(value string, maxRunes int) string {
 	value = strings.TrimSpace(value)
 	runes := []rune(value)

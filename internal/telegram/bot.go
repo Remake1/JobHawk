@@ -214,13 +214,11 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			response = "Could not load that search: " + err.Error()
 			break
 		}
-		found, err := b.runQuery(ctx, query)
-		if err != nil {
-			b.logger.Error("run search", "name", query.Name, "source", query.SourceType, "error", err)
-			response = sourceLabel(query.SourceType) + " search failed: " + err.Error()
-			break
+		loadingMessage := b.sendScreen(ctx, message.Chat.ID, searchLoadingScreen(query))
+		if loadingMessage == nil {
+			return
 		}
-		b.sendScreen(ctx, message.Chat.ID, searchResultsScreen(query, found))
+		go b.finishQuerySearch(ctx, loadingMessage, query)
 		return
 	case "/cancel":
 		b.clearCreationSession()

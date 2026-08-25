@@ -9,6 +9,7 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
   location matching, and title-word filters
 - Persistent search queries with common columns and source-specific JSONB filters
 - Inline-keyboard menus for creating, listing, running, and deleting searches
+- Non-blocking search execution with immediate Telegram progress feedback
 - `/greenhouse`, `/workday`, `/queries`, and one-shot `/search` command fallbacks
 - Access restricted to one configured Telegram chat ID
 - PostgreSQL 18 in Compose, pgx v5 pooling, and sqlc-generated query code

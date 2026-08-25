@@ -147,6 +147,30 @@ func TestWorkdayCreationPromptExplainsPartialLocation(t *testing.T) {
 	}
 }
 
+func TestSearchLoadingScreenShowsProviderAndHasNoButtons(t *testing.T) {
+	loading := searchLoadingScreen(searchqueries.Query{
+		ID: 9, Name: "State Street Software", SourceType: searchqueries.SourceWorkday,
+	})
+	if !strings.Contains(loading.text, "Searching Workday") || !strings.Contains(loading.text, "update automatically") {
+		t.Fatalf("loading text = %q", loading.text)
+	}
+	if loading.keyboard != nil {
+		t.Fatalf("loading keyboard = %+v", loading.keyboard)
+	}
+}
+
+func TestSearchErrorScreenAllowsRetry(t *testing.T) {
+	failure := searchErrorScreen(searchqueries.Query{
+		ID: 9, Name: "State Street Software", SourceType: searchqueries.SourceWorkday,
+	})
+	if !strings.Contains(failure.text, "Workday search failed") {
+		t.Fatalf("failure text = %q", failure.text)
+	}
+	if got := failure.keyboard.InlineKeyboard[0][0].CallbackData; got != "q:run:9" {
+		t.Fatalf("retry callback = %q", got)
+	}
+}
+
 func TestTruncateButtonTextHandlesWhitespaceAndUnicode(t *testing.T) {
 	got := truncateButtonText(strings.Repeat(" ", 50) + strings.Repeat("Ż", 50))
 	if len([]rune(got)) != 42 || !strings.HasSuffix(got, "…") {
