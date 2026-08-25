@@ -57,7 +57,7 @@ func queryListScreen(queries []searchqueries.Query) screen {
 	rows := make([][]telego.InlineKeyboardButton, 0, len(queries)+2)
 	for _, query := range queries {
 		rows = append(rows, tu.InlineKeyboardRow(callbackButton(
-			"🔎 "+truncateButtonText(query.Name),
+			truncateButtonText(queryListLabel(query)),
 			queryCallback("view", query.ID),
 		)))
 	}
@@ -78,6 +78,28 @@ func queryListScreen(queries []searchqueries.Query) screen {
 		tu.Entity("Search queries").Bold(),
 		tu.Entityf("\n\n%d saved. Select one to manage it.", len(queries)),
 	)
+}
+
+func queryListLabel(query searchqueries.Query) string {
+	return sourceEmoji(query.SourceType) + " | " + queryCompany(query) + " | " + strings.TrimSpace(query.Name)
+}
+
+func queryCompany(query searchqueries.Query) string {
+	switch query.SourceType {
+	case searchqueries.SourceAshby:
+		if query.Ashby != nil {
+			return query.Ashby.JobBoard
+		}
+	case searchqueries.SourceGreenhouse:
+		if query.Greenhouse != nil {
+			return query.Greenhouse.BoardToken
+		}
+	case searchqueries.SourceWorkday:
+		if query.Workday != nil {
+			return query.Workday.Tenant
+		}
+	}
+	return "unknown"
 }
 
 func queryDetailScreen(query searchqueries.Query) screen {
@@ -176,9 +198,9 @@ func creationPromptScreen(session creationSession, validationError string) scree
 		title = "Choose a job board"
 		instruction = "Select the source for this saved search."
 		rows = append(rows,
-			tu.InlineKeyboardRow(callbackButton("Ashby", callbackAshby)),
-			tu.InlineKeyboardRow(callbackButton("Greenhouse", callbackGreenhouse)),
-			tu.InlineKeyboardRow(callbackButton("Workday", callbackWorkday)),
+			tu.InlineKeyboardRow(callbackButton(sourceLabel(searchqueries.SourceGreenhouse), callbackGreenhouse)),
+			tu.InlineKeyboardRow(callbackButton(sourceLabel(searchqueries.SourceWorkday), callbackWorkday)),
+			tu.InlineKeyboardRow(callbackButton(sourceLabel(searchqueries.SourceAshby), callbackAshby)),
 		)
 	case creationName:
 		title = "Step 1 of 4 — Name"
@@ -200,7 +222,7 @@ func creationPromptScreen(session creationSession, validationError string) scree
 		if session.draft.SourceType == searchqueries.SourceWorkday {
 			instruction = "Enter text that must occur anywhere in the Workday location.\n\nExample: Poland matches Krakow, Poland"
 		} else {
-			instruction = "Enter the exact location shown by " + sourceLabel(session.draft.SourceType) + ".\n\nExample: Warsaw, Poland"
+			instruction = "Enter the exact location shown by " + sourceName(session.draft.SourceType) + ".\n\nExample: Warsaw, Poland"
 		}
 		rows = append(rows, tu.InlineKeyboardRow(callbackButton("Skip location", callbackSkipLoc)))
 	case creationTitleWords:
@@ -301,15 +323,32 @@ func querySummaryParts(query searchqueries.Query) []tu.MessageEntityCollection {
 }
 
 func sourceLabel(source searchqueries.SourceType) string {
+	return sourceEmoji(source) + " " + sourceName(source)
+}
+
+func sourceEmoji(source searchqueries.SourceType) string {
 	switch source {
 	case searchqueries.SourceAshby:
-		return "Ashby"
+		return "🔮"
+	case searchqueries.SourceGreenhouse:
+		return "🐸"
+	case searchqueries.SourceWorkday:
+		return "🦋"
+	default:
+		return "🔎"
+	}
+}
+
+func sourceName(source searchqueries.SourceType) string {
+	switch source {
+	case searchqueries.SourceAshby:
+		return "AshbyHQ"
 	case searchqueries.SourceGreenhouse:
 		return "Greenhouse"
 	case searchqueries.SourceWorkday:
 		return "Workday"
 	default:
-		return "Job board"
+		return "job board"
 	}
 }
 

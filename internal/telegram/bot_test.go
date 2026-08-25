@@ -103,6 +103,16 @@ func TestMainMenuScreenHasButtons(t *testing.T) {
 	}
 }
 
+func TestCreationSourceButtonsIncludeProviderEmojis(t *testing.T) {
+	prompt := creationPromptScreen(creationSession{step: creationSource}, "")
+	want := []string{"🐸 Greenhouse", "🦋 Workday", "🔮 AshbyHQ"}
+	for i, label := range want {
+		if got := prompt.keyboard.InlineKeyboard[i][0].Text; got != label {
+			t.Errorf("provider button %d = %q, want %q", i, got, label)
+		}
+	}
+}
+
 func TestQueryDetailScreenActionsUseQueryID(t *testing.T) {
 	filters := greenhouse.Filters{
 		BoardToken: "point72",
@@ -115,6 +125,28 @@ func TestQueryDetailScreenActionsUseQueryID(t *testing.T) {
 	buttons := detail.keyboard.InlineKeyboard[0]
 	if buttons[0].CallbackData != "q:run:42" || buttons[1].CallbackData != "q:delete:42" {
 		t.Fatalf("action callbacks = %q, %q", buttons[0].CallbackData, buttons[1].CallbackData)
+	}
+}
+
+func TestQueryListLabelsShowProviderCompanyAndName(t *testing.T) {
+	ashbyFilters := ashby.Filters{JobBoard: "snowflake", Location: "Warsaw, Poland"}
+	greenhouseFilters := greenhouse.Filters{BoardToken: "point72", Location: "Warsaw, Poland"}
+	workdayFilters := workday.Filters{Tenant: "statestreet"}
+	queries := []searchqueries.Query{
+		{ID: 1, Name: "Snowflake Software", SourceType: searchqueries.SourceAshby, Ashby: &ashbyFilters},
+		{ID: 2, Name: "Point72 Internship", SourceType: searchqueries.SourceGreenhouse, Greenhouse: &greenhouseFilters},
+		{ID: 3, Name: "State Street Student", SourceType: searchqueries.SourceWorkday, Workday: &workdayFilters},
+	}
+	want := []string{
+		"🔮 | snowflake | Snowflake Software",
+		"🐸 | point72 | Point72 Internship",
+		"🦋 | statestreet | State Street Student",
+	}
+	list := queryListScreen(queries)
+	for i, label := range want {
+		if got := list.keyboard.InlineKeyboard[i][0].Text; got != label {
+			t.Errorf("query button %d = %q, want %q", i, got, label)
+		}
 	}
 }
 
@@ -178,7 +210,7 @@ func TestSearchLoadingScreenShowsProviderAndHasNoButtons(t *testing.T) {
 	loading := searchLoadingScreen(searchqueries.Query{
 		ID: 9, Name: "State Street Software", SourceType: searchqueries.SourceWorkday,
 	})
-	if !strings.Contains(loading.text, "Searching Workday") || !strings.Contains(loading.text, "update automatically") {
+	if !strings.Contains(loading.text, "Searching 🦋 Workday") || !strings.Contains(loading.text, "update automatically") {
 		t.Fatalf("loading text = %q", loading.text)
 	}
 	if loading.keyboard != nil {
@@ -190,7 +222,7 @@ func TestSearchErrorScreenAllowsRetry(t *testing.T) {
 	failure := searchErrorScreen(searchqueries.Query{
 		ID: 9, Name: "State Street Software", SourceType: searchqueries.SourceWorkday,
 	})
-	if !strings.Contains(failure.text, "Workday search failed") {
+	if !strings.Contains(failure.text, "🦋 Workday search failed") {
 		t.Fatalf("failure text = %q", failure.text)
 	}
 	if got := failure.keyboard.InlineKeyboard[0][0].CallbackData; got != "q:run:9" {
