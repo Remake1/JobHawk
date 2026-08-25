@@ -7,7 +7,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"jobhawk/internal/ashby"
 	"jobhawk/internal/database/db"
+	"jobhawk/internal/greenhouse"
+	"jobhawk/internal/workday"
 )
 
 func TestDecodeGreenhouse(t *testing.T) {
@@ -99,5 +102,83 @@ func TestDecodeQuerySelectsAshby(t *testing.T) {
 	}
 	if query.SourceType != SourceAshby || query.Ashby == nil || query.Greenhouse != nil || query.Workday != nil {
 		t.Fatalf("decodeQuery() = %+v", query)
+	}
+}
+
+func TestApplyEditableFiltersPreservesImmutableFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		query Query
+		check func(*testing.T, Query)
+	}{
+		{
+			name: "Ashby board",
+			query: Query{ID: 1, Name: "Ashby query", SourceType: SourceAshby, Ashby: &ashby.Filters{
+				JobBoard: "snowflake", Location: "Old", TitleWords: []string{"Old"},
+			}},
+			check: func(t *testing.T, got Query) {
+				if got.Name != "Ashby query" || got.Ashby.JobBoard != "snowflake" {
+					t.Fatalf("immutable fields changed: %+v", got)
+				}
+			},
+		},
+		{
+			name: "Greenhouse board",
+			query: Query{ID: 2, Name: "Greenhouse query", SourceType: SourceGreenhouse, Greenhouse: &greenhouse.Filters{
+				BoardToken: "point72", Location: "Old", TitleWords: []string{"Old"},
+			}},
+			check: func(t *testing.T, got Query) {
+				if got.Name != "Greenhouse query" || got.Greenhouse.BoardToken != "point72" {
+					t.Fatalf("immutable fields changed: %+v", got)
+				}
+			},
+		},
+		{
+			name: "Workday coordinates",
+			query: Query{ID: 3, Name: "Workday query", SourceType: SourceWorkday, Workday: &workday.Filters{
+				Host: "tenant.wd1.myworkdayjobs.com", Tenant: "tenant", Site: "Global", Location: "Old", TitleWords: []string{"Old"},
+			}},
+			check: func(t *testing.T, got Query) {
+				if got.Name != "Workday query" || got.Workday.Host != "tenant.wd1.myworkdayjobs.com" || got.Workday.Tenant != "tenant" || got.Workday.Site != "Global" {
+					t.Fatalf("immutable fields changed: %+v", got)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := applyEditableFilters(tt.query, EditableFilters{
+				Location: " New location ",
+				Tags:     []string{" Engineer ", "Go", "go"},
+			})
+			if err != nil {
+				t.Fatalf("applyEditableFilters() error = %v", err)
+			}
+			tt.check(t, got)
+			editableLocation, editableTags := "", []string(nil)
+			switch got.SourceType {
+			case SourceAshby:
+				editableLocation, editableTags = got.Ashby.Location, got.Ashby.TitleWords
+			case SourceGreenhouse:
+				editableLocation, editableTags = got.Greenhouse.Location, got.Greenhouse.TitleWords
+			case SourceWorkday:
+				editableLocation, editableTags = got.Workday.Location, got.Workday.TitleWords
+			}
+			if editableLocation != "New location" || len(editableTags) != 2 || editableTags[0] != "Engineer" {
+				t.Fatalf("editable fields = %q, %v", editableLocation, editableTags)
+			}
+		})
+	}
+}
+
+func TestApplyEditableFiltersRejectsUnfilteredQuery(t *testing.T) {
+	_, err := applyEditableFilters(Query{
+		Name:       "Point72",
+		SourceType: SourceGreenhouse,
+		Greenhouse: &greenhouse.Filters{BoardToken: "point72", Location: "Warsaw"},
+	}, EditableFilters{})
+	if err == nil {
+		t.Fatal("applyEditableFilters() accepted an empty location and tags")
 	}
 }

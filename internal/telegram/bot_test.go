@@ -123,8 +123,11 @@ func TestQueryDetailScreenActionsUseQueryID(t *testing.T) {
 		ID: 42, Name: "Point72", SourceType: searchqueries.SourceGreenhouse, Greenhouse: &filters,
 	})
 	buttons := detail.keyboard.InlineKeyboard[0]
-	if buttons[0].CallbackData != "q:run:42" || buttons[1].CallbackData != "q:delete:42" {
+	if buttons[0].CallbackData != "q:run:42" || buttons[1].CallbackData != "q:edit:42" {
 		t.Fatalf("action callbacks = %q, %q", buttons[0].CallbackData, buttons[1].CallbackData)
+	}
+	if got := detail.keyboard.InlineKeyboard[1][0].CallbackData; got != "q:delete:42" {
+		t.Fatalf("delete callback = %q", got)
 	}
 }
 
@@ -157,6 +160,45 @@ func TestParseQueryCallback(t *testing.T) {
 	}
 	if _, _, ok := parseQueryCallback("q:unknown:73"); ok {
 		t.Fatal("parseQueryCallback() accepted an unknown action")
+	}
+	if action, id, ok := parseQueryCallback("q:edit_tags:73"); !ok || action != "edit_tags" || id != 73 {
+		t.Fatalf("parseQueryCallback(edit tags) = (%q, %d, %v)", action, id, ok)
+	}
+}
+
+func TestQueryEditorExposesOnlyLocationAndTags(t *testing.T) {
+	filters := greenhouse.Filters{
+		BoardToken: "point72", Location: "Warsaw, Poland", TitleWords: []string{"Software", "Intern"},
+	}
+	editor := queryEditorScreen(searchqueries.Query{
+		ID: 42, Name: "Point72", SourceType: searchqueries.SourceGreenhouse, Greenhouse: &filters,
+	})
+	buttons := editor.keyboard.InlineKeyboard[0]
+	if buttons[0].CallbackData != "q:edit_location:42" || buttons[1].CallbackData != "q:edit_tags:42" {
+		t.Fatalf("editor callbacks = %q, %q", buttons[0].CallbackData, buttons[1].CallbackData)
+	}
+	if !strings.Contains(editor.text, "query name and job board cannot be changed") || !strings.Contains(editor.text, "Software, Intern") {
+		t.Fatalf("editor text = %q", editor.text)
+	}
+}
+
+func TestEditPromptOffersClearOnlyWhenAnotherFilterRemains(t *testing.T) {
+	locationOnly := greenhouse.Filters{BoardToken: "point72", Location: "Warsaw"}
+	prompt := editPromptScreen(editSession{
+		field: editLocation,
+		query: searchqueries.Query{ID: 42, SourceType: searchqueries.SourceGreenhouse, Greenhouse: &locationOnly},
+	}, "")
+	if len(prompt.keyboard.InlineKeyboard) != 1 || prompt.keyboard.InlineKeyboard[0][0].CallbackData != "q:edit:42" {
+		t.Fatalf("location-only prompt unexpectedly allows clear: %+v", prompt.keyboard.InlineKeyboard)
+	}
+
+	both := greenhouse.Filters{BoardToken: "point72", Location: "Warsaw", TitleWords: []string{"Engineer"}}
+	prompt = editPromptScreen(editSession{
+		field: editLocation,
+		query: searchqueries.Query{ID: 42, SourceType: searchqueries.SourceGreenhouse, Greenhouse: &both},
+	}, "")
+	if got := prompt.keyboard.InlineKeyboard[0][0].CallbackData; got != "q:clear_location:42" {
+		t.Fatalf("clear callback = %q", got)
 	}
 }
 

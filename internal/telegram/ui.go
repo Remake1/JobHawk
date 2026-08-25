@@ -106,8 +106,9 @@ func queryDetailScreen(query searchqueries.Query) screen {
 	keyboard := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
 			callbackButton("▶ Run query", queryCallback("run", query.ID)),
-			callbackButton("🗑 Delete", queryCallback("delete", query.ID)),
+			callbackButton("✏️ Edit query", queryCallback("edit", query.ID)),
 		),
+		tu.InlineKeyboardRow(callbackButton("🗑 Delete", queryCallback("delete", query.ID))),
 		tu.InlineKeyboardRow(callbackButton("← Search queries", callbackList)),
 	)
 	return formattedScreen(keyboard, querySummaryParts(query)...)
@@ -387,7 +388,7 @@ func parseQueryCallback(data string) (action string, id int64, ok bool) {
 		return "", 0, false
 	}
 	switch parts[1] {
-	case "view", "run", "delete", "confirm_delete":
+	case "view", "run", "edit", "edit_location", "edit_tags", "clear_location", "clear_tags", "delete", "confirm_delete":
 		return parts[1], id, true
 	default:
 		return "", 0, false

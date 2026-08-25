@@ -34,6 +34,14 @@ type Query struct {
 	UpdatedAt  time.Time
 }
 
+// EditableFilters is the complete set of fields that may be changed after a
+// query is created. Provider coordinates, the query name, and source type are
+// deliberately absent so callers cannot overwrite them through the edit API.
+type EditableFilters struct {
+	Location string
+	Tags     []string
+}
+
 type AshbyQuery struct {
 	ID        int64
 	Name      string
@@ -184,6 +192,98 @@ func (s *Store) List(ctx context.Context) ([]Query, error) {
 		result = append(result, query)
 	}
 	return result, nil
+}
+
+func (s *Store) Update(ctx context.Context, id int64, editable EditableFilters) (Query, error) {
+	row, err := s.queries.GetSearchQueryByAnyID(ctx, id)
+	if err != nil {
+		return Query{}, fmt.Errorf("get search query for update: %w", err)
+	}
+	query, err := decodeQuery(row)
+	if err != nil {
+		return Query{}, err
+	}
+	query, err = applyEditableFilters(query, editable)
+	if err != nil {
+		return Query{}, err
+	}
+	payload, err := encodeQueryFilters(query)
+	if err != nil {
+		return Query{}, err
+	}
+
+	updated, err := s.queries.UpdateSearchQueryFilters(ctx, db.UpdateSearchQueryFiltersParams{
+		ID:         id,
+		SourceType: string(query.SourceType),
+		Filters:    payload,
+	})
+	if err != nil {
+		return Query{}, fmt.Errorf("update search query filters: %w", err)
+	}
+	return decodeQuery(updated)
+}
+
+func applyEditableFilters(query Query, editable EditableFilters) (Query, error) {
+	switch query.SourceType {
+	case SourceAshby:
+		if query.Ashby == nil {
+			return Query{}, errors.New("Ashby query filters are missing")
+		}
+		filters := *query.Ashby
+		filters.Location = editable.Location
+		filters.TitleWords = editable.Tags
+		normalized, err := filters.Normalize()
+		if err != nil {
+			return Query{}, err
+		}
+		query.Ashby = &normalized
+	case SourceGreenhouse:
+		if query.Greenhouse == nil {
+			return Query{}, errors.New("Greenhouse query filters are missing")
+		}
+		filters := *query.Greenhouse
+		filters.Location = editable.Location
+		filters.TitleWords = editable.Tags
+		normalized, err := filters.Normalize()
+		if err != nil {
+			return Query{}, err
+		}
+		query.Greenhouse = &normalized
+	case SourceWorkday:
+		if query.Workday == nil {
+			return Query{}, errors.New("Workday query filters are missing")
+		}
+		filters := *query.Workday
+		filters.Location = editable.Location
+		filters.TitleWords = editable.Tags
+		normalized, err := filters.Normalize()
+		if err != nil {
+			return Query{}, err
+		}
+		query.Workday = &normalized
+	default:
+		return Query{}, fmt.Errorf("query %q has unsupported source type %q", query.Name, query.SourceType)
+	}
+	return query, nil
+}
+
+func encodeQueryFilters(query Query) (json.RawMessage, error) {
+	var filters any
+	switch query.SourceType {
+	case SourceAshby:
+		filters = query.Ashby
+	case SourceGreenhouse:
+		filters = query.Greenhouse
+	case SourceWorkday:
+		filters = query.Workday
+	default:
+		return nil, fmt.Errorf("query %q has unsupported source type %q", query.Name, query.SourceType)
+	}
+	payload, err := json.Marshal(filters)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s filters: %w", query.SourceType, err)
+	}
+	return payload, nil
 }
 
 func (s *Store) Delete(ctx context.Context, id int64) (bool, error) {

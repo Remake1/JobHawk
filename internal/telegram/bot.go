@@ -26,6 +26,7 @@ type queryStore interface {
 	Get(context.Context, string) (searchqueries.Query, error)
 	GetByID(context.Context, int64) (searchqueries.Query, error)
 	List(context.Context) ([]searchqueries.Query, error)
+	Update(context.Context, int64, searchqueries.EditableFilters) (searchqueries.Query, error)
 	Delete(context.Context, int64) (bool, error)
 }
 
@@ -52,6 +53,8 @@ type Bot struct {
 	subscribers        *subscribers.Store
 	creationMu         sync.Mutex
 	creation           *creationSession
+	editMu             sync.Mutex
+	edit               *editSession
 }
 
 func New(
@@ -149,6 +152,10 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		b.handleCreationInput(ctx, message.Chat.ID, text)
 		return
 	}
+	if !strings.HasPrefix(text, "/") && b.hasEditInputSession() {
+		b.handleEditInput(ctx, message.Chat.ID, text)
+		return
+	}
 
 	command, args, ok := parseCommand(text)
 	if !ok {
@@ -160,10 +167,12 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 	case "/start":
 		b.subscribers.Add(message.Chat.ID)
 		b.clearCreationSession()
+		b.clearEditSession()
 		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
 		return
 	case "/menu", "/help":
 		b.clearCreationSession()
+		b.clearEditSession()
 		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
 		return
 	case "/subscribe":
@@ -179,6 +188,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			response = "Job alerts are not active. Use /subscribe to enable them."
 		}
 	case "/greenhouse":
+		b.clearEditSession()
 		if strings.TrimSpace(args) == "" {
 			session := b.beginProviderCreation(searchqueries.SourceGreenhouse)
 			b.sendScreen(ctx, message.Chat.ID, creationPromptScreen(session, ""))
@@ -199,6 +209,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromGreenhouse(query)))
 		return
 	case "/ashby", "/ashbyhq":
+		b.clearEditSession()
 		if strings.TrimSpace(args) == "" {
 			session := b.beginProviderCreation(searchqueries.SourceAshby)
 			b.sendScreen(ctx, message.Chat.ID, creationPromptScreen(session, ""))
@@ -219,6 +230,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromAshby(saved)))
 		return
 	case "/workday":
+		b.clearEditSession()
 		if strings.TrimSpace(args) == "" {
 			session := b.beginProviderCreation(searchqueries.SourceWorkday)
 			b.sendScreen(ctx, message.Chat.ID, creationPromptScreen(session, ""))
@@ -240,10 +252,12 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		return
 	case "/queries":
 		b.clearCreationSession()
+		b.clearEditSession()
 		b.sendQueryList(ctx, message.Chat.ID)
 		return
 	case "/search":
 		b.clearCreationSession()
+		b.clearEditSession()
 		if strings.TrimSpace(args) == "" {
 			response = "Query name is required. Usage: /search <name>"
 			break
@@ -262,6 +276,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		return
 	case "/cancel":
 		b.clearCreationSession()
+		b.clearEditSession()
 		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
 		return
 	default:

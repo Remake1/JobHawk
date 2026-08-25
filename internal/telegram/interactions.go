@@ -39,6 +39,7 @@ type creationSession struct {
 }
 
 func (b *Bot) beginCreationSession() creationSession {
+	b.clearEditSession()
 	b.creationMu.Lock()
 	defer b.creationMu.Unlock()
 	b.creation = &creationSession{step: creationSource}
@@ -46,6 +47,7 @@ func (b *Bot) beginCreationSession() creationSession {
 }
 
 func (b *Bot) beginProviderCreation(source searchqueries.SourceType) creationSession {
+	b.clearEditSession()
 	b.creationMu.Lock()
 	defer b.creationMu.Unlock()
 	b.creation = &creationSession{step: creationName, draft: creationDraft{SourceType: source}}
@@ -212,6 +214,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 
 	var next screen
 	var toast string
+	b.clearEditSession()
 	switch query.Data {
 	case callbackHome:
 		b.clearCreationSession()
@@ -322,6 +325,34 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		switch action {
 		case "view":
 			next = queryDetailScreen(queryRecord)
+		case "edit":
+			session := b.beginEditSession(queryRecord, editNoField)
+			next = queryEditorScreen(session.query)
+		case "edit_location":
+			session := b.beginEditSession(queryRecord, editLocation)
+			next = editPromptScreen(session, "")
+		case "edit_tags":
+			session := b.beginEditSession(queryRecord, editTags)
+			next = editPromptScreen(session, "")
+		case "clear_location", "clear_tags":
+			editable, editableErr := editableFilters(queryRecord)
+			if editableErr != nil {
+				b.callbackFailure(ctx, query, "Could not edit the search.", editableErr)
+				return
+			}
+			if action == "clear_location" {
+				editable.Location = ""
+			} else {
+				editable.Tags = nil
+			}
+			updated, updateErr := b.queryStore.Update(ctx, queryRecord.ID, editable)
+			if updateErr != nil {
+				b.callbackFailure(ctx, query, "Could not clear this filter: "+updateErr.Error(), updateErr)
+				return
+			}
+			b.beginEditSession(updated, editNoField)
+			next = queryEditorScreen(updated)
+			toast = "Query updated"
 		case "run":
 			// Telegram callback queries must be acknowledged quickly. Workday can
 			// take long enough to make the callback expire, so update the menu and

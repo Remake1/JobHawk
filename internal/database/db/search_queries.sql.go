@@ -143,6 +143,35 @@ func (q *Queries) ListSearchQueries(ctx context.Context) ([]SearchQuery, error) 
 	return items, nil
 }
 
+const updateSearchQueryFilters = `-- name: UpdateSearchQueryFilters :one
+UPDATE search_queries
+SET filters = $3,
+    updated_at = now()
+WHERE id = $1 AND source_type = $2
+RETURNING id, name, source_type, filters, enabled, created_at, updated_at
+`
+
+type UpdateSearchQueryFiltersParams struct {
+	ID         int64           `json:"id"`
+	SourceType string          `json:"source_type"`
+	Filters    json.RawMessage `json:"filters"`
+}
+
+func (q *Queries) UpdateSearchQueryFilters(ctx context.Context, arg UpdateSearchQueryFiltersParams) (SearchQuery, error) {
+	row := q.db.QueryRow(ctx, updateSearchQueryFilters, arg.ID, arg.SourceType, arg.Filters)
+	var i SearchQuery
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.SourceType,
+		&i.Filters,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertSearchQuery = `-- name: UpsertSearchQuery :one
 INSERT INTO search_queries (name, source_type, filters)
 VALUES ($1, $2, $3)
