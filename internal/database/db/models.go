@@ -10,6 +10,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Job struct {
+	ID          int64              `json:"id"`
+	SourceType  string             `json:"source_type"`
+	SourceKey   string             `json:"source_key"`
+	ExternalID  string             `json:"external_id"`
+	Title       string             `json:"title"`
+	Company     string             `json:"company"`
+	Location    string             `json:"location"`
+	Url         string             `json:"url"`
+	PostedAt    pgtype.Timestamptz `json:"posted_at"`
+	FirstSeenAt pgtype.Timestamptz `json:"first_seen_at"`
+	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+}
+
 type SearchQuery struct {
 	ID         int64              `json:"id"`
 	Name       string             `json:"name"`

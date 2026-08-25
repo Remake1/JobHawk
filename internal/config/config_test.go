@@ -12,6 +12,8 @@ func TestLoad(t *testing.T) {
 	t.Setenv("TELEGRAM_CHAT_ID", "42")
 	t.Setenv("DATABASE_URL", "postgres://localhost/jobhawk")
 	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("DAILY_RUN_HOUR", "9")
+	t.Setenv("DAILY_TIMEZONE", "America/Chicago")
 
 	cfg, err := Load()
 	if err != nil {
@@ -25,6 +27,9 @@ func TestLoad(t *testing.T) {
 	}
 	if cfg.LogLevel != slog.LevelDebug {
 		t.Errorf("LogLevel = %v", cfg.LogLevel)
+	}
+	if cfg.DailyRunHour != 9 || cfg.DailyTimezone.String() != "America/Chicago" {
+		t.Errorf("daily schedule = %d %s", cfg.DailyRunHour, cfg.DailyTimezone)
 	}
 }
 
@@ -58,6 +63,8 @@ func TestLoadReadsDotEnv(t *testing.T) {
 	restoreEnv(t, "TELEGRAM_CHAT_ID")
 	restoreEnv(t, "DATABASE_URL")
 	restoreEnv(t, "LOG_LEVEL")
+	restoreEnv(t, "DAILY_RUN_HOUR")
+	restoreEnv(t, "DAILY_TIMEZONE")
 
 	cfg, err := Load()
 	if err != nil {
@@ -65,6 +72,16 @@ func TestLoadReadsDotEnv(t *testing.T) {
 	}
 	if cfg.TelegramBotToken != "from-dotenv" || cfg.TelegramChatID != 42 || cfg.DatabaseURL != "postgres://localhost/jobhawk" || cfg.LogLevel != slog.LevelWarn {
 		t.Fatalf("Load() = %+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidDailySchedule(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "token")
+	t.Setenv("TELEGRAM_CHAT_ID", "42")
+	t.Setenv("DATABASE_URL", "postgres://localhost/jobhawk")
+	t.Setenv("DAILY_RUN_HOUR", "25")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted an invalid daily run hour")
 	}
 }
 

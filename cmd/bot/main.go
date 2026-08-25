@@ -8,11 +8,14 @@ import (
 	"syscall"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 
 	"jobhawk/internal/ashby"
 	"jobhawk/internal/config"
+	"jobhawk/internal/daily"
 	"jobhawk/internal/database/db"
 	"jobhawk/internal/greenhouse"
+	"jobhawk/internal/jobstore"
 	"jobhawk/internal/searchqueries"
 	telegrambot "jobhawk/internal/telegram"
 	"jobhawk/internal/workday"
@@ -40,7 +43,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	queryStore := searchqueries.NewStore(db.New(pool))
+	databaseQueries := db.New(pool)
+	queryStore := searchqueries.NewStore(databaseQueries)
+	discoveredJobStore := jobstore.NewStore(databaseQueries)
 	greenhouseClient := greenhouse.NewClient(nil)
 	workdayClient := workday.NewClient(nil)
 	ashbyClient := ashby.NewClient(nil)
@@ -57,9 +62,22 @@ func main() {
 		logger.Error("create bot", "error", err)
 		os.Exit(1)
 	}
+	dailyRunner := daily.NewRunner(
+		queryStore,
+		discoveredJobStore,
+		bot,
+		ashbyClient,
+		greenhouseClient,
+		workdayClient,
+	)
+	bot.SetDailyRunner(dailyRunner)
+	scheduler := daily.NewScheduler(dailyRunner, cfg.DailyRunHour, cfg.DailyTimezone, logger)
 
-	if err := bot.Run(ctx); err != nil {
-		logger.Error("bot stopped with an error", "error", err)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error { return bot.Run(groupCtx) })
+	group.Go(func() error { return scheduler.Run(groupCtx) })
+	if err := group.Wait(); err != nil {
+		logger.Error("application stopped with an error", "error", err)
 		os.Exit(1)
 	}
 }

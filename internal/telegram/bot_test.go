@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"jobhawk/internal/ashby"
+	"jobhawk/internal/daily"
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
@@ -18,6 +19,37 @@ func TestFormatJob(t *testing.T) {
 	want := "New job opening\nGo Engineer at Acme\nRemote\nhttps://example.com/jobs/1"
 	if got != want {
 		t.Fatalf("formatJob() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDailyDigestWithNoNewJobs(t *testing.T) {
+	got := formatDailyDigest(daily.Report{QueryCount: 3})
+	if got != "Daily job report\n\nNo new jobs." {
+		t.Fatalf("formatDailyDigest() = %q", got)
+	}
+}
+
+func TestFormatDailyDigestListsNewJobsOnce(t *testing.T) {
+	got := formatDailyDigest(daily.Report{
+		QueryCount: 2,
+		NewJobs: []jobs.Job{
+			{Title: "Go Engineer", Company: "Acme", Location: "Remote", URL: "https://example.com/1"},
+			{Title: "Platform Engineer", Company: "Beta"},
+		},
+	})
+	want := "Daily job report\n\n2 new jobs found:\n\n1. Go Engineer at Acme\nRemote\nhttps://example.com/1\n2. Platform Engineer at Beta"
+	if got != want {
+		t.Fatalf("formatDailyDigest() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDailyDigestMentionsFailures(t *testing.T) {
+	got := formatDailyDigest(daily.Report{
+		QueryCount: 2,
+		Failures:   []daily.QueryFailure{{QueryName: "Broken"}},
+	})
+	if !strings.Contains(got, "No new jobs.") || !strings.Contains(got, "1 of 2 searches failed") {
+		t.Fatalf("formatDailyDigest() = %q", got)
 	}
 }
 
@@ -95,11 +127,14 @@ func TestParseWorkdayArgs(t *testing.T) {
 
 func TestMainMenuScreenHasButtons(t *testing.T) {
 	menu := mainMenuScreen()
-	if len(menu.entities) == 0 || menu.keyboard == nil || len(menu.keyboard.InlineKeyboard) != 2 {
+	if len(menu.entities) == 0 || menu.keyboard == nil || len(menu.keyboard.InlineKeyboard) != 3 {
 		t.Fatalf("mainMenuScreen() = %+v", menu)
 	}
 	if got := menu.keyboard.InlineKeyboard[0][0].CallbackData; got != callbackList {
 		t.Fatalf("first callback = %q", got)
+	}
+	if got := menu.keyboard.InlineKeyboard[2][0].CallbackData; got != callbackRunDaily {
+		t.Fatalf("daily callback = %q", got)
 	}
 }
 

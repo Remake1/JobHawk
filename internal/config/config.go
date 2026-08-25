@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+	_ "time/tzdata"
 
 	"github.com/joho/godotenv"
 )
@@ -16,6 +18,8 @@ type Config struct {
 	TelegramChatID   int64
 	DatabaseURL      string
 	LogLevel         slog.Level
+	DailyRunHour     int
+	DailyTimezone    *time.Location
 }
 
 func Load() (Config, error) {
@@ -42,13 +46,39 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	dailyRunHour, err := parseDailyRunHour(os.Getenv("DAILY_RUN_HOUR"))
+	if err != nil {
+		return Config{}, err
+	}
+	timezoneName := strings.TrimSpace(os.Getenv("DAILY_TIMEZONE"))
+	if timezoneName == "" {
+		timezoneName = "America/Chicago"
+	}
+	dailyTimezone, err := time.LoadLocation(timezoneName)
+	if err != nil {
+		return Config{}, fmt.Errorf("DAILY_TIMEZONE must be a valid IANA timezone: %w", err)
+	}
 
 	return Config{
 		TelegramBotToken: token,
 		TelegramChatID:   chatID,
 		DatabaseURL:      databaseURL,
 		LogLevel:         level,
+		DailyRunHour:     dailyRunHour,
+		DailyTimezone:    dailyTimezone,
 	}, nil
+}
+
+func parseDailyRunHour(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 9, nil
+	}
+	hour, err := strconv.Atoi(value)
+	if err != nil || hour < 0 || hour > 23 {
+		return 0, errors.New("DAILY_RUN_HOUR must be an integer from 0 through 23")
+	}
+	return hour, nil
 }
 
 func parseLogLevel(value string) (slog.Level, error) {

@@ -12,6 +12,7 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 
 	"jobhawk/internal/ashby"
+	"jobhawk/internal/daily"
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
@@ -42,6 +43,10 @@ type workdaySearcher interface {
 	Search(context.Context, workday.Filters) ([]jobs.Job, error)
 }
 
+type dailyJobRunner interface {
+	RunOnce(context.Context) error
+}
+
 type Bot struct {
 	api                *telego.Bot
 	logger             *slog.Logger
@@ -50,11 +55,18 @@ type Bot struct {
 	ashbySearcher      ashbySearcher
 	greenhouseSearcher greenhouseSearcher
 	workdaySearcher    workdaySearcher
+	dailyRunner        dailyJobRunner
 	subscribers        *subscribers.Store
 	creationMu         sync.Mutex
 	creation           *creationSession
 	editMu             sync.Mutex
 	edit               *editSession
+}
+
+// SetDailyRunner connects the on-demand debug action to the same runner used
+// by the scheduler. It is configured during startup before Bot.Run begins.
+func (b *Bot) SetDailyRunner(runner dailyJobRunner) {
+	b.dailyRunner = runner
 }
 
 func New(
@@ -91,6 +103,10 @@ func NewWithProviders(
 	if err != nil {
 		return nil, fmt.Errorf("initialize Telegram client: %w", err)
 	}
+	subscriberStore := subscribers.NewStore()
+	// This is a single-user bot, so daily delivery is active by default after
+	// every restart. The existing subscribe commands can still pause/resume it.
+	subscriberStore.Add(allowedChatID)
 
 	return &Bot{
 		api:                api,
@@ -100,7 +116,7 @@ func NewWithProviders(
 		ashbySearcher:      ashbySearcher,
 		greenhouseSearcher: greenhouseSearcher,
 		workdaySearcher:    workdaySearcher,
-		subscribers:        subscribers.NewStore(),
+		subscribers:        subscriberStore,
 	}, nil
 }
 
@@ -425,6 +441,65 @@ func (b *Bot) Notify(ctx context.Context, job jobs.Job) {
 			b.logger.Error("send job alert", "chat_id", chatID, "job_id", job.ID, "error", err)
 		}
 	}
+}
+
+// NotifyDailyDigest sends exactly one aggregate report to each subscribed
+// chat. Job processing is deliberately completed before this method is called.
+func (b *Bot) NotifyDailyDigest(ctx context.Context, report daily.Report) error {
+	text := formatDailyDigest(report)
+	var sendErrors []error
+	for _, chatID := range b.subscribers.All() {
+		if _, err := b.api.SendMessage(ctx, tu.Message(tu.ID(chatID), text)); err != nil {
+			b.logger.Error("send daily job digest", "chat_id", chatID, "error", err)
+			sendErrors = append(sendErrors, fmt.Errorf("send daily digest to chat %d: %w", chatID, err))
+		}
+	}
+	return errors.Join(sendErrors...)
+}
+
+const maxDigestBytes = 3900
+
+func formatDailyDigest(report daily.Report) string {
+	failureNote := ""
+	if len(report.Failures) > 0 {
+		failureNote = fmt.Sprintf("\n\nWarning: %d of %d searches failed.", len(report.Failures), report.QueryCount)
+	}
+	if len(report.NewJobs) == 0 {
+		return "Daily job report\n\nNo new jobs." + failureNote
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Daily job report\n\n%d new jobs found:\n", len(report.NewJobs))
+	included := 0
+	for i, job := range report.NewJobs {
+		entry := fmt.Sprintf("\n%d. %s", i+1, formatDigestJob(job))
+		// Leave room for the failure note and an omitted-jobs summary.
+		if result.Len()+len(entry)+len(failureNote)+80 > maxDigestBytes {
+			break
+		}
+		result.WriteString(entry)
+		included++
+	}
+	if omitted := len(report.NewJobs) - included; omitted > 0 {
+		fmt.Fprintf(&result, "\n\n... and %d more new jobs.", omitted)
+	}
+	result.WriteString(failureNote)
+	return result.String()
+}
+
+func formatDigestJob(job jobs.Job) string {
+	line := strings.TrimSpace(job.Title)
+	if company := strings.TrimSpace(job.Company); company != "" {
+		line += " at " + company
+	}
+	parts := []string{line}
+	if location := strings.TrimSpace(job.Location); location != "" {
+		parts = append(parts, location)
+	}
+	if jobURL := strings.TrimSpace(job.URL); jobURL != "" {
+		parts = append(parts, jobURL)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func formatJob(job jobs.Job) string {

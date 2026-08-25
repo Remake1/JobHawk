@@ -7,6 +7,7 @@ require github.com/mymmrac/telego v1.11.1
 require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
+	golang.org/x/sync v0.21.0
 )
 
 require (
@@ -26,7 +27,6 @@ require (
 	github.com/valyala/fasthttp v1.72.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
-	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 )

@@ -16,8 +16,11 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
 - Access restricted to one configured Telegram chat ID
 - PostgreSQL 18 in Compose, pgx v5 pooling, and sqlc-generated query code
 - A provider-independent `jobs.Job` result model
+- Daily 09:00 subscriptions for every saved query, with one Telegram digest
+- Durable first-seen job deduplication across queries and application restarts
 
-The alert polling/subscription loop is intentionally not implemented yet. Saving a query prepares it for that worker; `/search` lets you run it once now.
+Saving a query automatically includes it in the daily subscription. `/search`
+still lets you run it once without affecting the daily schedule.
 
 ## Run locally
 
@@ -30,7 +33,13 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Compose starts PostgreSQL, applies `db/migrations/001_create_search_queries.sql` to a new data volume, waits for database health, and then starts the bot. The bot loads `.env` automatically for direct local runs; exported environment variables take precedence.
+Compose starts PostgreSQL, applies the SQL files under `db/migrations` to a new
+data volume, waits for database health, and then starts the bot. The bot loads
+`.env` automatically for direct local runs; exported environment variables take
+precedence.
+
+The daily report runs at 09:00 in `DAILY_TIMEZONE` (default:
+`America/Chicago`). Both the hour and timezone can be changed in `.env`.
 
 To run the app directly instead:
 
@@ -48,6 +57,10 @@ Send `/start` or `/menu` to open the button interface:
    filters in the guided form. For Ashby and Workday, paste any public job URL
    from the target site.
 3. Review the typed filters and choose **Save search**.
+
+Use **Run daily report now** on the main menu to trigger the full scheduled
+workflow for debugging. It runs every saved query, updates the `jobs` table,
+and sends the same single digest as the 09:00 scheduler.
 
 Choose **Search queries** to see saved searches. Selecting one opens its details with **Run query** and **Delete** buttons. Deletion requires confirmation and permanently removes the row from PostgreSQL.
 
@@ -98,6 +111,23 @@ Run or inspect saved queries:
 The one-shot search calls the selected provider, normalizes matching results into
 `jobs.Job`, and returns at most ten jobs in Telegram.
 
+## Daily subscriptions
+
+Every saved query runs once per day. The runner executes all queries, normalizes
+and upserts every match into `jobs`, and considers a job new only when its
+provider identity has never been stored before. Jobs matched by multiple
+queries appear once. After all queries finish, the bot sends one aggregate
+Telegram report: either **No new jobs** or a list of newly discovered jobs.
+Individual query failures do not prevent the other queries or the digest from
+completing; the report includes a failure count.
+
+For a PostgreSQL volume created before the `jobs` migration was added, apply it
+once before restarting the bot:
+
+```sh
+docker compose exec -T postgres psql -U jobhawk -d jobhawk < db/migrations/002_create_jobs.sql
+```
+
 ## Database model
 
 `search_queries` keeps common fields (`name`, `source_type`, `enabled`, and
@@ -106,6 +136,10 @@ source-specific Go type `ashby.Filters`, `greenhouse.Filters`, or
 `workday.Filters`. Query names
 are unique; saving a query with an existing name updates it, including its
 source type.
+
+`jobs` stores one row per provider opening using the unique identity
+`(source_type, source_key, external_id)`. Its normalized display fields are
+refreshed on later sightings while `first_seen_at` remains unchanged.
 
 Change SQL under `db/` and regenerate the pgx v5 data layer with:
 
@@ -123,9 +157,7 @@ make build
 
 ## Next steps
 
-1. Add a polling service that loads enabled queries, runs each source, and records seen job IDs.
-2. Deliver unseen matches through `telegram.Bot.Notify`.
-3. Add enable/disable and delete commands for individual queries.
-4. Add more source types with their own typed JSONB filter payloads.
+1. Add enable/disable controls for individual queries.
+2. Add more source types with their own typed JSONB filter payloads.
 
 Do not commit `.env`; it is ignored because it contains the bot token.

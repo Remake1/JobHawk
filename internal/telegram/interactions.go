@@ -229,6 +229,19 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		next = queryListScreen(queries)
 	case callbackAdd:
 		next = creationPromptScreen(b.beginCreationSession(), "")
+	case callbackRunDaily:
+		b.clearCreationSession()
+		if b.dailyRunner == nil {
+			b.answerCallback(ctx, query.ID, "Daily runner is not configured.", true)
+			return
+		}
+		b.answerCallback(ctx, query.ID, "Daily report started", false)
+		go func() {
+			if err := b.dailyRunner.RunOnce(ctx); err != nil && ctx.Err() == nil {
+				b.logger.Error("run daily report on demand", "error", err)
+			}
+		}()
+		return
 	case callbackGreenhouse:
 		next = creationPromptScreen(b.beginProviderCreation(searchqueries.SourceGreenhouse), "")
 	case callbackWorkday:

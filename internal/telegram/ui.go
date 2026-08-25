@@ -16,6 +16,7 @@ const (
 	callbackHome       = "m:home"
 	callbackList       = "m:list"
 	callbackAdd        = "m:add"
+	callbackRunDaily   = "m:daily"
 	callbackCancel     = "w:cancel"
 	callbackSkipLoc    = "w:skiploc"
 	callbackSkipTitle  = "w:skiptitle"
@@ -45,11 +46,12 @@ func mainMenuScreen() screen {
 	keyboard := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(callbackButton("🔎 Search queries", callbackList)),
 		tu.InlineKeyboardRow(callbackButton("➕ Add search query", callbackAdd)),
+		tu.InlineKeyboardRow(callbackButton("🧪 Run daily report now", callbackRunDaily)),
 	)
 	return formattedScreen(
 		keyboard,
 		tu.Entity("JobHawk").Bold(),
-		tu.Entity("\n\nCreate and manage job searches, or run one immediately."),
+		tu.Entity("\n\nCreate and manage job searches, or run the daily report on demand."),
 	)
 }
 
