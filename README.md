@@ -4,13 +4,15 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
 
 ## What is included
 
-- Typed Greenhouse filters for board token, exact location, and title words
+- Typed Ashby and Greenhouse filters for board name/token, exact location, and
+  title words
 - Workday CXS searches with tenant/site discovery from a job URL, partial
   location matching, and title-word filters
 - Persistent search queries with common columns and source-specific JSONB filters
 - Inline-keyboard menus for creating, listing, running, and deleting searches
 - Non-blocking search execution with immediate Telegram progress feedback
-- `/greenhouse`, `/workday`, `/queries`, and one-shot `/search` command fallbacks
+- `/ashby`, `/greenhouse`, `/workday`, `/queries`, and one-shot `/search`
+  command fallbacks
 - Access restricted to one configured Telegram chat ID
 - PostgreSQL 18 in Compose, pgx v5 pooling, and sqlc-generated query code
 - A provider-independent `jobs.Job` result model
@@ -37,13 +39,14 @@ make db-up
 make run
 ```
 
-## Greenhouse and Workday searches
+## Ashby, Greenhouse, and Workday searches
 
 Send `/start` or `/menu` to open the button interface:
 
 1. Choose **Add search query**.
-2. Choose Greenhouse or Workday, then enter the provider details and filters in
-   the guided form. For Workday, paste any public job URL from the target site.
+2. Choose Ashby, Greenhouse, or Workday, then enter the provider details and
+   filters in the guided form. For Ashby and Workday, paste any public job URL
+   from the target site.
 3. Review the typed filters and choose **Save search**.
 
 Choose **Search queries** to see saved searches. Selecting one opens its details with **Run query** and **Delete** buttons. Deletion requires confirmation and permanently removes the row from PostgreSQL.
@@ -51,6 +54,19 @@ Choose **Search queries** to see saved searches. Selecting one opens its details
 The creation flow is kept in memory while it is in progress; only a completed search is persisted. `/cancel` abandons the current draft.
 
 The compact command form remains available as a fallback.
+
+Save an Ashby search using any job URL from the target board:
+
+```text
+/ashby Snowflake Software | https://jobs.ashbyhq.com/snowflake/fc1923c1-b151-4458-a792-40d58331a5be | Warsaw, Poland | Software, Engineer
+```
+
+JobHawk derives the board name (`snowflake`) and fetches its currently published
+jobs from `https://api.ashbyhq.com/posting-api/job-board/snowflake`. Location
+comparison checks Ashby's readable structured address and raw location label,
+including secondary locations; it is exact after trimming and case-insensitive.
+Every title word must be present, also case-insensitively. You can enter the
+board name instead of a full job URL in the command or guided flow.
 
 Save the Point72 example with this Telegram command:
 
@@ -86,7 +102,8 @@ The one-shot search calls the selected provider, normalizes matching results int
 
 `search_queries` keeps common fields (`name`, `source_type`, `enabled`, and
 timestamps) as SQL columns. `filters` is JSONB and is decoded into the
-source-specific Go type `greenhouse.Filters` or `workday.Filters`. Query names
+source-specific Go type `ashby.Filters`, `greenhouse.Filters`, or
+`workday.Filters`. Query names
 are unique; saving a query with an existing name updates it, including its
 source type.
 

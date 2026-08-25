@@ -29,6 +29,25 @@ func TestDecodeGreenhouse(t *testing.T) {
 	}
 }
 
+func TestDecodeAshby(t *testing.T) {
+	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	query, err := decodeAshby(db.SearchQuery{
+		ID:         9,
+		Name:       "Snowflake Software",
+		SourceType: "ashby",
+		Filters:    json.RawMessage(`{"job_board":"snowflake","location":"Warsaw, Poland","title_words":["Software","Engineer"]}`),
+		Enabled:    true,
+		CreatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("decodeAshby() error = %v", err)
+	}
+	if query.ID != 9 || query.Filters.JobBoard != "snowflake" || len(query.Filters.TitleWords) != 2 {
+		t.Fatalf("decodeAshby() = %+v", query)
+	}
+}
+
 func TestDecodeGreenhouseRejectsAnotherSource(t *testing.T) {
 	_, err := decodeGreenhouse(db.SearchQuery{Name: "other", SourceType: "workday"})
 	if err == nil {
@@ -64,7 +83,21 @@ func TestDecodeQuerySelectsWorkday(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeQuery() error = %v", err)
 	}
-	if query.SourceType != SourceWorkday || query.Workday == nil || query.Greenhouse != nil {
+	if query.SourceType != SourceWorkday || query.Workday == nil || query.Greenhouse != nil || query.Ashby != nil {
+		t.Fatalf("decodeQuery() = %+v", query)
+	}
+}
+
+func TestDecodeQuerySelectsAshby(t *testing.T) {
+	query, err := decodeQuery(db.SearchQuery{
+		Name:       "Ashby",
+		SourceType: "ashby",
+		Filters:    json.RawMessage(`{"job_board":"snowflake","location":"Warsaw, Poland"}`),
+	})
+	if err != nil {
+		t.Fatalf("decodeQuery() error = %v", err)
+	}
+	if query.SourceType != SourceAshby || query.Ashby == nil || query.Greenhouse != nil || query.Workday != nil {
 		t.Fatalf("decodeQuery() = %+v", query)
 	}
 }

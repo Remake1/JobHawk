@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"jobhawk/internal/ashby"
 	"jobhawk/internal/config"
 	"jobhawk/internal/database/db"
 	"jobhawk/internal/greenhouse"
@@ -42,12 +43,14 @@ func main() {
 	queryStore := searchqueries.NewStore(db.New(pool))
 	greenhouseClient := greenhouse.NewClient(nil)
 	workdayClient := workday.NewClient(nil)
-	bot, err := telegrambot.NewWithWorkday(
+	ashbyClient := ashby.NewClient(nil)
+	bot, err := telegrambot.NewWithProviders(
 		cfg.TelegramBotToken,
 		cfg.TelegramChatID,
 		queryStore,
 		greenhouseClient,
 		workdayClient,
+		ashbyClient,
 		logger,
 	)
 	if err != nil {

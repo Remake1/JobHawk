@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jobhawk/internal/ashby"
 	"jobhawk/internal/database/db"
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/workday"
@@ -16,6 +17,7 @@ import (
 type SourceType string
 
 const (
+	SourceAshby      SourceType = "ashby"
 	SourceGreenhouse SourceType = "greenhouse"
 	SourceWorkday    SourceType = "workday"
 )
@@ -24,11 +26,21 @@ type Query struct {
 	ID         int64
 	Name       string
 	SourceType SourceType
+	Ashby      *ashby.Filters
 	Greenhouse *greenhouse.Filters
 	Workday    *workday.Filters
 	Enabled    bool
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+type AshbyQuery struct {
+	ID        int64
+	Name      string
+	Filters   ashby.Filters
+	Enabled   bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type GreenhouseQuery struct {
@@ -55,6 +67,31 @@ type Store struct {
 
 func NewStore(queries *db.Queries) *Store {
 	return &Store{queries: queries}
+}
+
+func (s *Store) SaveAshby(ctx context.Context, name string, filters ashby.Filters) (AshbyQuery, error) {
+	name, err := normalizeName(name)
+	if err != nil {
+		return AshbyQuery{}, err
+	}
+	filters, err = filters.Normalize()
+	if err != nil {
+		return AshbyQuery{}, err
+	}
+	payload, err := json.Marshal(filters)
+	if err != nil {
+		return AshbyQuery{}, fmt.Errorf("encode Ashby filters: %w", err)
+	}
+
+	row, err := s.queries.UpsertSearchQuery(ctx, db.UpsertSearchQueryParams{
+		Name:       name,
+		SourceType: string(SourceAshby),
+		Filters:    payload,
+	})
+	if err != nil {
+		return AshbyQuery{}, fmt.Errorf("save Ashby search query: %w", err)
+	}
+	return decodeAshby(row)
 }
 
 func (s *Store) SaveGreenhouse(ctx context.Context, name string, filters greenhouse.Filters) (GreenhouseQuery, error) {
@@ -165,6 +202,56 @@ func (s *Store) GetGreenhouse(ctx context.Context, name string) (GreenhouseQuery
 	return decodeGreenhouse(row)
 }
 
+func (s *Store) GetAshby(ctx context.Context, name string) (AshbyQuery, error) {
+	row, err := s.queries.GetSearchQueryByName(ctx, strings.TrimSpace(name))
+	if err != nil {
+		return AshbyQuery{}, fmt.Errorf("get search query: %w", err)
+	}
+	return decodeAshby(row)
+}
+
+func (s *Store) GetAshbyByID(ctx context.Context, id int64) (AshbyQuery, error) {
+	row, err := s.queries.GetSearchQueryByID(ctx, db.GetSearchQueryByIDParams{
+		ID:         id,
+		SourceType: string(SourceAshby),
+	})
+	if err != nil {
+		return AshbyQuery{}, fmt.Errorf("get Ashby search query: %w", err)
+	}
+	return decodeAshby(row)
+}
+
+func (s *Store) DeleteAshby(ctx context.Context, id int64) (bool, error) {
+	deleted, err := s.queries.DeleteSearchQueryByID(ctx, db.DeleteSearchQueryByIDParams{
+		ID:         id,
+		SourceType: string(SourceAshby),
+	})
+	if err != nil {
+		return false, fmt.Errorf("delete Ashby search query: %w", err)
+	}
+	return deleted == 1, nil
+}
+
+func (s *Store) ListAshby(ctx context.Context) ([]AshbyQuery, error) {
+	rows, err := s.queries.ListSearchQueries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list search queries: %w", err)
+	}
+
+	result := make([]AshbyQuery, 0, len(rows))
+	for _, row := range rows {
+		if SourceType(row.SourceType) != SourceAshby {
+			continue
+		}
+		query, err := decodeAshby(row)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, query)
+	}
+	return result, nil
+}
+
 func (s *Store) GetGreenhouseByID(ctx context.Context, id int64) (GreenhouseQuery, error) {
 	row, err := s.queries.GetSearchQueryByID(ctx, db.GetSearchQueryByIDParams{
 		ID:         id,
@@ -229,6 +316,28 @@ func decodeGreenhouse(row db.SearchQuery) (GreenhouseQuery, error) {
 	}, nil
 }
 
+func decodeAshby(row db.SearchQuery) (AshbyQuery, error) {
+	if SourceType(row.SourceType) != SourceAshby {
+		return AshbyQuery{}, fmt.Errorf("query %q has source type %q, not %q", row.Name, row.SourceType, SourceAshby)
+	}
+	var filters ashby.Filters
+	if err := json.Unmarshal(row.Filters, &filters); err != nil {
+		return AshbyQuery{}, fmt.Errorf("decode filters for query %q: %w", row.Name, err)
+	}
+	filters, err := filters.Normalize()
+	if err != nil {
+		return AshbyQuery{}, fmt.Errorf("validate filters for query %q: %w", row.Name, err)
+	}
+	return AshbyQuery{
+		ID:        row.ID,
+		Name:      row.Name,
+		Filters:   filters,
+		Enabled:   row.Enabled,
+		CreatedAt: row.CreatedAt.Time,
+		UpdatedAt: row.UpdatedAt.Time,
+	}, nil
+}
+
 func decodeWorkday(row db.SearchQuery) (WorkdayQuery, error) {
 	if SourceType(row.SourceType) != SourceWorkday {
 		return WorkdayQuery{}, fmt.Errorf("query %q has source type %q, not %q", row.Name, row.SourceType, SourceWorkday)
@@ -261,6 +370,12 @@ func decodeQuery(row db.SearchQuery) (Query, error) {
 		UpdatedAt:  row.UpdatedAt.Time,
 	}
 	switch query.SourceType {
+	case SourceAshby:
+		decoded, err := decodeAshby(row)
+		if err != nil {
+			return Query{}, err
+		}
+		query.Ashby = &decoded.Filters
 	case SourceGreenhouse:
 		decoded, err := decodeGreenhouse(row)
 		if err != nil {

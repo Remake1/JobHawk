@@ -11,6 +11,7 @@ import (
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
 
+	"jobhawk/internal/ashby"
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
@@ -19,12 +20,17 @@ import (
 )
 
 type queryStore interface {
+	SaveAshby(context.Context, string, ashby.Filters) (searchqueries.AshbyQuery, error)
 	SaveGreenhouse(context.Context, string, greenhouse.Filters) (searchqueries.GreenhouseQuery, error)
 	SaveWorkday(context.Context, string, workday.Filters) (searchqueries.WorkdayQuery, error)
 	Get(context.Context, string) (searchqueries.Query, error)
 	GetByID(context.Context, int64) (searchqueries.Query, error)
 	List(context.Context) ([]searchqueries.Query, error)
 	Delete(context.Context, int64) (bool, error)
+}
+
+type ashbySearcher interface {
+	Search(context.Context, ashby.Filters) ([]jobs.Job, error)
 }
 
 type greenhouseSearcher interface {
@@ -40,6 +46,7 @@ type Bot struct {
 	logger             *slog.Logger
 	allowedChatID      int64
 	queryStore         queryStore
+	ashbySearcher      ashbySearcher
 	greenhouseSearcher greenhouseSearcher
 	workdaySearcher    workdaySearcher
 	subscribers        *subscribers.Store
@@ -54,7 +61,7 @@ func New(
 	greenhouseSearcher greenhouseSearcher,
 	logger *slog.Logger,
 ) (*Bot, error) {
-	return NewWithWorkday(token, allowedChatID, queryStore, greenhouseSearcher, workday.NewClient(nil), logger)
+	return NewWithProviders(token, allowedChatID, queryStore, greenhouseSearcher, workday.NewClient(nil), ashby.NewClient(nil), logger)
 }
 
 func NewWithWorkday(
@@ -63,6 +70,18 @@ func NewWithWorkday(
 	queryStore queryStore,
 	greenhouseSearcher greenhouseSearcher,
 	workdaySearcher workdaySearcher,
+	logger *slog.Logger,
+) (*Bot, error) {
+	return NewWithProviders(token, allowedChatID, queryStore, greenhouseSearcher, workdaySearcher, ashby.NewClient(nil), logger)
+}
+
+func NewWithProviders(
+	token string,
+	allowedChatID int64,
+	queryStore queryStore,
+	greenhouseSearcher greenhouseSearcher,
+	workdaySearcher workdaySearcher,
+	ashbySearcher ashbySearcher,
 	logger *slog.Logger,
 ) (*Bot, error) {
 	api, err := telego.NewBot(token)
@@ -75,6 +94,7 @@ func NewWithWorkday(
 		logger:             logger,
 		allowedChatID:      allowedChatID,
 		queryStore:         queryStore,
+		ashbySearcher:      ashbySearcher,
 		greenhouseSearcher: greenhouseSearcher,
 		workdaySearcher:    workdaySearcher,
 		subscribers:        subscribers.NewStore(),
@@ -178,6 +198,26 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		b.clearCreationSession()
 		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromGreenhouse(query)))
 		return
+	case "/ashby", "/ashbyhq":
+		if strings.TrimSpace(args) == "" {
+			session := b.beginProviderCreation(searchqueries.SourceAshby)
+			b.sendScreen(ctx, message.Chat.ID, creationPromptScreen(session, ""))
+			return
+		}
+		name, filters, err := parseAshbyArgs(args)
+		if err != nil {
+			response = err.Error() + "\n\n" + ashbyUsage()
+			break
+		}
+		saved, err := b.queryStore.SaveAshby(ctx, name, filters)
+		if err != nil {
+			b.logger.Error("save Ashby query", "name", name, "error", err)
+			response = "Could not save the Ashby search: " + err.Error()
+			break
+		}
+		b.clearCreationSession()
+		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromAshby(saved)))
+		return
 	case "/workday":
 		if strings.TrimSpace(args) == "" {
 			session := b.beginProviderCreation(searchqueries.SourceWorkday)
@@ -277,6 +317,34 @@ func greenhouseUsage() string {
 	return "Usage:\n/greenhouse <name> | <board token> | <location> | <comma-separated title words>\n\nExample:\n/greenhouse Point72 SWE Internship 2027 | point72 | Warsaw, Poland | 2027, Internship, Software"
 }
 
+func parseAshbyArgs(args string) (string, ashby.Filters, error) {
+	parts := strings.Split(args, "|")
+	if len(parts) != 4 {
+		return "", ashby.Filters{}, errors.New("expected four fields separated by |")
+	}
+	name := strings.TrimSpace(parts[0])
+	if name == "" {
+		return "", ashby.Filters{}, errors.New("query name is required")
+	}
+	jobBoard, err := ashby.NormalizeJobBoardInput(parts[1])
+	if err != nil {
+		return "", ashby.Filters{}, err
+	}
+	filters, err := (ashby.Filters{
+		JobBoard:   jobBoard,
+		Location:   strings.TrimSpace(parts[2]),
+		TitleWords: parseTitleWords(parts[3]),
+	}).Normalize()
+	if err != nil {
+		return "", ashby.Filters{}, err
+	}
+	return name, filters, nil
+}
+
+func ashbyUsage() string {
+	return "Usage:\n/ashby <name> | <Ashby job URL or board name> | <location> | <comma-separated title words>\n\nExample:\n/ashby Snowflake Software | https://jobs.ashbyhq.com/snowflake/fc1923c1-b151-4458-a792-40d58331a5be | Warsaw, Poland | Software, Engineer"
+}
+
 func parseWorkdayArgs(args string) (string, workday.Filters, error) {
 	parts := strings.Split(args, "|")
 	if len(parts) != 4 {
@@ -300,6 +368,11 @@ func workdayUsage() string {
 
 func (b *Bot) runQuery(ctx context.Context, query searchqueries.Query) ([]jobs.Job, error) {
 	switch query.SourceType {
+	case searchqueries.SourceAshby:
+		if query.Ashby == nil {
+			return nil, errors.New("Ashby filters are missing")
+		}
+		return b.ashbySearcher.Search(ctx, *query.Ashby)
 	case searchqueries.SourceGreenhouse:
 		if query.Greenhouse == nil {
 			return nil, errors.New("Greenhouse filters are missing")

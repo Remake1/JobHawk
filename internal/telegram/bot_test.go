@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"jobhawk/internal/ashby"
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
@@ -63,6 +64,19 @@ func TestParseGreenhouseArgs(t *testing.T) {
 func TestParseGreenhouseArgsRejectsMissingFields(t *testing.T) {
 	if _, _, err := parseGreenhouseArgs("name point72 Warsaw"); err == nil {
 		t.Fatal("parseGreenhouseArgs() expected an error")
+	}
+}
+
+func TestParseAshbyArgs(t *testing.T) {
+	name, filters, err := parseAshbyArgs("Snowflake Software | https://jobs.ashbyhq.com/snowflake/fc1923c1-b151-4458-a792-40d58331a5be | Warsaw, Poland | Software, Engineer")
+	if err != nil {
+		t.Fatalf("parseAshbyArgs() error = %v", err)
+	}
+	if name != "Snowflake Software" || filters.JobBoard != "snowflake" || filters.Location != "Warsaw, Poland" {
+		t.Fatalf("parseAshbyArgs() = %q, %+v", name, filters)
+	}
+	if len(filters.TitleWords) != 2 || filters.TitleWords[1] != "Engineer" {
+		t.Fatalf("TitleWords = %v", filters.TitleWords)
 	}
 }
 
@@ -143,6 +157,19 @@ func TestWorkdayCreationPromptExplainsPartialLocation(t *testing.T) {
 		},
 	}, "")
 	if !strings.Contains(prompt.text, "Poland matches Krakow, Poland") {
+		t.Fatalf("prompt text = %q", prompt.text)
+	}
+}
+
+func TestAshbyCreationPromptAcceptsJobURL(t *testing.T) {
+	prompt := creationPromptScreen(creationSession{
+		step: creationBoard,
+		draft: creationDraft{
+			SourceType: searchqueries.SourceAshby,
+			Ashby:      ashby.Filters{},
+		},
+	}, "")
+	if !strings.Contains(prompt.text, "jobs.ashbyhq.com/snowflake/") {
 		t.Fatalf("prompt text = %q", prompt.text)
 	}
 }

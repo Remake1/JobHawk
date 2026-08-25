@@ -21,6 +21,7 @@ const (
 	callbackSkipTitle  = "w:skiptitle"
 	callbackSave       = "w:save"
 	callbackRestart    = "w:restart"
+	callbackAshby      = "w:ashby"
 	callbackGreenhouse = "w:greenhouse"
 	callbackWorkday    = "w:workday"
 )
@@ -175,6 +176,7 @@ func creationPromptScreen(session creationSession, validationError string) scree
 		title = "Choose a job board"
 		instruction = "Select the source for this saved search."
 		rows = append(rows,
+			tu.InlineKeyboardRow(callbackButton("Ashby", callbackAshby)),
 			tu.InlineKeyboardRow(callbackButton("Greenhouse", callbackGreenhouse)),
 			tu.InlineKeyboardRow(callbackButton("Workday", callbackWorkday)),
 		)
@@ -182,10 +184,14 @@ func creationPromptScreen(session creationSession, validationError string) scree
 		title = "Step 1 of 4 — Name"
 		instruction = "Give this search a short, recognizable name.\n\nExample: " + creationNameExample(session.draft.SourceType)
 	case creationBoard:
-		if session.draft.SourceType == searchqueries.SourceWorkday {
+		switch session.draft.SourceType {
+		case searchqueries.SourceWorkday:
 			title = "Step 2 of 4 — Workday job URL"
 			instruction = "Paste any public job URL from the Workday site you want to search.\n\nExample: https://statestreet.wd1.myworkdayjobs.com/Global/job/Munich-Germany/Working-Student_R-795614-1/apply"
-		} else {
+		case searchqueries.SourceAshby:
+			title = "Step 2 of 4 — Ashby job URL"
+			instruction = "Paste any public job URL from the Ashby board you want to search, or enter its board name.\n\nExample: https://jobs.ashbyhq.com/snowflake/fc1923c1-b151-4458-a792-40d58331a5be"
+		default:
 			title = "Step 2 of 4 — Greenhouse board"
 			instruction = "Enter the board token from the Greenhouse URL.\n\nExample: point72"
 		}
@@ -194,7 +200,7 @@ func creationPromptScreen(session creationSession, validationError string) scree
 		if session.draft.SourceType == searchqueries.SourceWorkday {
 			instruction = "Enter text that must occur anywhere in the Workday location.\n\nExample: Poland matches Krakow, Poland"
 		} else {
-			instruction = "Enter the exact location shown by Greenhouse.\n\nExample: Warsaw, Poland"
+			instruction = "Enter the exact location shown by " + sourceLabel(session.draft.SourceType) + ".\n\nExample: Warsaw, Poland"
 		}
 		rows = append(rows, tu.InlineKeyboardRow(callbackButton("Skip location", callbackSkipLoc)))
 	case creationTitleWords:
@@ -219,10 +225,14 @@ func creationPromptScreen(session creationSession, validationError string) scree
 }
 
 func draftLocation(draft creationDraft) string {
-	if draft.SourceType == searchqueries.SourceWorkday {
+	switch draft.SourceType {
+	case searchqueries.SourceWorkday:
 		return draft.Workday.Location
+	case searchqueries.SourceAshby:
+		return draft.Ashby.Location
+	default:
+		return draft.Greenhouse.Location
 	}
-	return draft.Greenhouse.Location
 }
 
 func creationReviewScreen(session creationSession) screen {
@@ -250,6 +260,18 @@ func querySummaryParts(query searchqueries.Query) []tu.MessageEntityCollection {
 		tu.Entity(sourceLabel(query.SourceType)).Code(),
 	}
 	switch query.SourceType {
+	case searchqueries.SourceAshby:
+		if query.Ashby == nil {
+			return append(parts, tu.Entity("\n\nInvalid Ashby filters").Bold())
+		}
+		parts = append(parts,
+			tu.Entity("\n\nBoard\n"),
+			tu.Entity(query.Ashby.JobBoard).Code(),
+			tu.Entity("\n\nLocation\n"),
+			tu.Entity(valueOrAny(query.Ashby.Location)).Code(),
+			tu.Entity("\n\nTitle contains every word\n"),
+			tu.Entity(wordsOrAny(query.Ashby.TitleWords)).Code(),
+		)
 	case searchqueries.SourceGreenhouse:
 		if query.Greenhouse == nil {
 			return append(parts, tu.Entity("\n\nInvalid Greenhouse filters").Bold())
@@ -280,6 +302,8 @@ func querySummaryParts(query searchqueries.Query) []tu.MessageEntityCollection {
 
 func sourceLabel(source searchqueries.SourceType) string {
 	switch source {
+	case searchqueries.SourceAshby:
+		return "Ashby"
 	case searchqueries.SourceGreenhouse:
 		return "Greenhouse"
 	case searchqueries.SourceWorkday:
@@ -290,10 +314,14 @@ func sourceLabel(source searchqueries.SourceType) string {
 }
 
 func creationNameExample(source searchqueries.SourceType) string {
-	if source == searchqueries.SourceWorkday {
+	switch source {
+	case searchqueries.SourceWorkday:
 		return "State Street Working Student"
+	case searchqueries.SourceAshby:
+		return "Snowflake Software Engineer"
+	default:
+		return "Point72 SWE Internship 2027"
 	}
-	return "Point72 SWE Internship 2027"
 }
 
 func queryCallback(action string, id int64) string {
