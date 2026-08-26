@@ -3,10 +3,12 @@ package telegram
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"jobhawk/internal/ashby"
 	"jobhawk/internal/daily"
 	"jobhawk/internal/greenhouse"
+	"jobhawk/internal/hourly"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
 	"jobhawk/internal/workday"
@@ -156,13 +158,52 @@ func TestQueryDetailScreenActionsUseQueryID(t *testing.T) {
 	}
 	detail := queryDetailScreen(searchqueries.Query{
 		ID: 42, Name: "Point72", SourceType: searchqueries.SourceGreenhouse, Greenhouse: &filters,
-	})
+	}, nil)
 	buttons := detail.keyboard.InlineKeyboard[0]
 	if buttons[0].CallbackData != "q:run:42" || buttons[1].CallbackData != "q:edit:42" {
 		t.Fatalf("action callbacks = %q, %q", buttons[0].CallbackData, buttons[1].CallbackData)
 	}
-	if got := detail.keyboard.InlineKeyboard[1][0].CallbackData; got != "q:delete:42" {
+	if got := detail.keyboard.InlineKeyboard[1][0].CallbackData; got != "q:hourly_create:42" {
+		t.Fatalf("hourly callback = %q", got)
+	}
+	if got := detail.keyboard.InlineKeyboard[2][0].CallbackData; got != "q:delete:42" {
 		t.Fatalf("delete callback = %q", got)
+	}
+}
+
+func TestQueryDetailScreenShowsExistingHourlyAlert(t *testing.T) {
+	filters := greenhouse.Filters{BoardToken: "point72", Location: "Warsaw"}
+	detail := queryDetailScreen(searchqueries.Query{
+		ID: 42, Name: "Point72", SourceType: searchqueries.SourceGreenhouse, Greenhouse: &filters,
+	}, &hourly.Subscription{
+		SearchDate: time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC), IntervalMinutes: 30,
+	})
+	if got := detail.keyboard.InlineKeyboard[1][0].CallbackData; got != "q:hourly_delete:42" {
+		t.Fatalf("hourly callback = %q", got)
+	}
+	if !strings.Contains(detail.text, "2026-08-25 every 30 minutes") {
+		t.Fatalf("detail text = %q", detail.text)
+	}
+}
+
+func TestFirstHourlyRun(t *testing.T) {
+	location := time.FixedZone("test", -5*60*60)
+	now := time.Date(2026, 8, 25, 11, 42, 0, 0, location)
+	if got := firstHourlyRun(localDate(now, location), now, location); !got.Equal(now) {
+		t.Fatalf("today first run = %v, want %v", got, now)
+	}
+	future := time.Date(2026, 8, 27, 0, 0, 0, 0, location)
+	if got := firstHourlyRun(future, now, location); !got.Equal(future) {
+		t.Fatalf("future first run = %v, want %v", got, future)
+	}
+}
+
+func TestFormatHourlyResults(t *testing.T) {
+	got := formatHourlyResults(searchqueries.Query{Name: "Warsaw Go"}, []jobs.Job{{
+		Title: "Go Engineer", Company: "Acme", Location: "Warsaw", URL: "https://example.com/1",
+	}})
+	if !strings.Contains(got, "Hourly job alert\nWarsaw Go") || !strings.Contains(got, "1 matching job found") || !strings.Contains(got, "Go Engineer at Acme") {
+		t.Fatalf("formatHourlyResults() = %q", got)
 	}
 }
 

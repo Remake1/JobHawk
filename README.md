@@ -17,6 +17,7 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
 - PostgreSQL 18 in Compose, pgx v5 pooling, and sqlc-generated query code
 - A provider-independent `jobs.Job` result model
 - Daily 09:00 subscriptions for every saved query, with one Telegram digest
+- Date-scoped 15, 30, or 60 minute alerts for individual saved queries
 - Durable first-seen job deduplication across queries and application restarts
 
 Saving a query automatically includes it in the daily subscription. `/search`
@@ -63,6 +64,12 @@ workflow for debugging. It runs every saved query, updates the `jobs` table,
 and sends the same single digest as the 09:00 scheduler.
 
 Choose **Search queries** to see saved searches. Selecting one opens its details with **Run query** and **Delete** buttons. Deletion requires confirmation and permanently removes the row from PostgreSQL.
+
+From a query's details, choose **Create hourly alert**, enter the date as
+`YYYY-MM-DD`, and select a 15, 30, or 60 minute interval. On that local date,
+JobHawk runs the selected query at the chosen interval. Empty searches are
+silent; any matching results produce a query-scoped Telegram notification.
+The same query screen shows the active schedule and lets you delete it.
 
 The creation flow is kept in memory while it is in progress; only a completed search is persisted. `/cancel` abandons the current draft.
 
@@ -121,11 +128,22 @@ Telegram report: either **No new jobs** or a list of newly discovered jobs.
 Individual query failures do not prevent the other queries or the digest from
 completing; the report includes a failure count.
 
-For a PostgreSQL volume created before the `jobs` migration was added, apply it
-once before restarting the bot:
+## Hourly subscriptions
+
+Hourly subscriptions are stored separately from saved queries and are scoped to
+one query and one calendar date in `DAILY_TIMEZONE`. A schedule created for
+today is eligible to run immediately; a future schedule begins at midnight on
+its selected date. The scheduler checks for due work once per minute and keeps
+the configured cadence based on the persisted next-run time, including across
+application restarts. Expired schedules are removed automatically. Deleting a
+saved query also deletes its hourly subscription.
+
+For an existing PostgreSQL volume, apply any migrations that it predates once
+before restarting the bot:
 
 ```sh
 docker compose exec -T postgres psql -U jobhawk -d jobhawk < db/migrations/002_create_jobs.sql
+docker compose exec -T postgres psql -U jobhawk -d jobhawk < db/migrations/003_create_hourly_search_queries.sql
 ```
 
 ## Database model
@@ -140,6 +158,10 @@ source type.
 `jobs` stores one row per provider opening using the unique identity
 `(source_type, source_key, external_id)`. Its normalized display fields are
 refreshed on later sightings while `first_seen_at` remains unchanged.
+
+`hourly_search_queries` stores one date-scoped schedule per saved query, with a
+validated 15, 30, or 60 minute interval and its durable next run time. Its
+foreign key uses `ON DELETE CASCADE` so schedules cannot outlive their query.
 
 Change SQL under `db/` and regenerate the pgx v5 data layer with:
 

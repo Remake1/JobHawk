@@ -25,6 +25,7 @@ type editSession struct {
 
 func (b *Bot) beginEditSession(query searchqueries.Query, field editField) editSession {
 	b.clearCreationSession()
+	b.clearHourlySession()
 	b.editMu.Lock()
 	defer b.editMu.Unlock()
 	b.edit = &editSession{field: field, query: query}
@@ -62,7 +63,7 @@ func (b *Bot) handleEditInput(ctx context.Context, chatID int64, input string) {
 	if err != nil {
 		b.logger.Error("read editable search filters", "query_id", session.query.ID, "error", err)
 		b.clearEditSession()
-		b.sendScreen(ctx, chatID, queryDetailScreen(session.query))
+		b.sendScreen(ctx, chatID, queryDetailScreen(session.query, nil))
 		return
 	}
 	switch session.field {

@@ -8,6 +8,7 @@ import (
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
 
+	"jobhawk/internal/hourly"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
 )
@@ -104,16 +105,61 @@ func queryCompany(query searchqueries.Query) string {
 	return "unknown"
 }
 
-func queryDetailScreen(query searchqueries.Query) screen {
+func queryDetailScreen(query searchqueries.Query, subscription *hourly.Subscription) screen {
+	hourlyButton := callbackButton("⏱ Create hourly alert", queryCallback("hourly_create", query.ID))
+	if subscription != nil {
+		hourlyButton = callbackButton("⏱ Delete hourly alert", queryCallback("hourly_delete", query.ID))
+	}
 	keyboard := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
 			callbackButton("▶ Run query", queryCallback("run", query.ID)),
 			callbackButton("✏️ Edit query", queryCallback("edit", query.ID)),
 		),
+		tu.InlineKeyboardRow(hourlyButton),
 		tu.InlineKeyboardRow(callbackButton("🗑 Delete", queryCallback("delete", query.ID))),
 		tu.InlineKeyboardRow(callbackButton("← Search queries", callbackList)),
 	)
-	return formattedScreen(keyboard, querySummaryParts(query)...)
+	parts := querySummaryParts(query)
+	if subscription != nil {
+		parts = append(parts,
+			tu.Entity("\n\nHourly alert\n"),
+			tu.Entity(subscription.SearchDate.Format("2006-01-02")+" every "+strconv.Itoa(subscription.IntervalMinutes)+" minutes").Code(),
+		)
+	}
+	return formattedScreen(keyboard, parts...)
+}
+
+func hourlyDatePromptScreen(query searchqueries.Query, validationError string) screen {
+	parts := []tu.MessageEntityCollection{
+		tu.Entity("Create hourly alert").Bold(),
+		tu.Entity("\n\n" + query.Name),
+		tu.Entity("\n\nSend the date to monitor in YYYY-MM-DD format."),
+	}
+	if validationError != "" {
+		parts = append(parts, tu.Entity("\n\n⚠ "+validationError).Bold())
+	}
+	return formattedScreen(
+		tu.InlineKeyboard(tu.InlineKeyboardRow(callbackButton("Cancel", queryCallback("view", query.ID)))),
+		parts...,
+	)
+}
+
+func hourlyIntervalScreen(session hourlySession) screen {
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(
+			callbackButton("15 min", queryCallback("hourly_15", session.query.ID)),
+			callbackButton("30 min", queryCallback("hourly_30", session.query.ID)),
+			callbackButton("60 min", queryCallback("hourly_60", session.query.ID)),
+		),
+		tu.InlineKeyboardRow(callbackButton("Cancel", queryCallback("view", session.query.ID))),
+	)
+	return formattedScreen(
+		keyboard,
+		tu.Entity("Create hourly alert").Bold(),
+		tu.Entity("\n\nDate\n"),
+		tu.Entity(session.searchDate.Format("2006-01-02")).Code(),
+		tu.Entity("\n\nChoose how often this query should run."),
+	)
 }
 
 func deleteConfirmationScreen(query searchqueries.Query) screen {
@@ -390,7 +436,7 @@ func parseQueryCallback(data string) (action string, id int64, ok bool) {
 		return "", 0, false
 	}
 	switch parts[1] {
-	case "view", "run", "edit", "edit_location", "edit_tags", "clear_location", "clear_tags", "delete", "confirm_delete":
+	case "view", "run", "edit", "edit_location", "edit_tags", "clear_location", "clear_tags", "hourly_create", "hourly_15", "hourly_30", "hourly_60", "hourly_delete", "delete", "confirm_delete":
 		return parts[1], id, true
 	default:
 		return "", 0, false

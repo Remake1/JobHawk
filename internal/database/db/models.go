@@ -10,6 +10,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type HourlySearchQuery struct {
+	ID              int64              `json:"id"`
+	SearchQueryID   int64              `json:"search_query_id"`
+	SearchDate      pgtype.Date        `json:"search_date"`
+	IntervalMinutes int32              `json:"interval_minutes"`
+	NextRunAt       pgtype.Timestamptz `json:"next_run_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Job struct {
 	ID          int64              `json:"id"`
 	SourceType  string             `json:"source_type"`

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -14,6 +15,7 @@ import (
 	"jobhawk/internal/ashby"
 	"jobhawk/internal/daily"
 	"jobhawk/internal/greenhouse"
+	"jobhawk/internal/hourly"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
 	"jobhawk/internal/subscribers"
@@ -47,6 +49,12 @@ type dailyJobRunner interface {
 	RunOnce(context.Context) error
 }
 
+type hourlySubscriptionStore interface {
+	Upsert(context.Context, int64, time.Time, int, time.Time) (hourly.Subscription, error)
+	GetByQueryID(context.Context, int64) (hourly.Subscription, bool, error)
+	DeleteByQueryID(context.Context, int64) (bool, error)
+}
+
 type Bot struct {
 	api                *telego.Bot
 	logger             *slog.Logger
@@ -56,17 +64,31 @@ type Bot struct {
 	greenhouseSearcher greenhouseSearcher
 	workdaySearcher    workdaySearcher
 	dailyRunner        dailyJobRunner
+	hourlyStore        hourlySubscriptionStore
+	hourlyLocation     *time.Location
 	subscribers        *subscribers.Store
 	creationMu         sync.Mutex
 	creation           *creationSession
 	editMu             sync.Mutex
 	edit               *editSession
+	hourlyMu           sync.Mutex
+	hourly             *hourlySession
 }
 
 // SetDailyRunner connects the on-demand debug action to the same runner used
 // by the scheduler. It is configured during startup before Bot.Run begins.
 func (b *Bot) SetDailyRunner(runner dailyJobRunner) {
 	b.dailyRunner = runner
+}
+
+// SetHourlySubscriptions connects the query-detail controls to the durable
+// schedule store. The daily timezone is also used for date-scoped alerts.
+func (b *Bot) SetHourlySubscriptions(store hourlySubscriptionStore, location *time.Location) {
+	b.hourlyStore = store
+	if location == nil {
+		location = time.Local
+	}
+	b.hourlyLocation = location
 }
 
 func New(
@@ -116,6 +138,7 @@ func NewWithProviders(
 		ashbySearcher:      ashbySearcher,
 		greenhouseSearcher: greenhouseSearcher,
 		workdaySearcher:    workdaySearcher,
+		hourlyLocation:     time.Local,
 		subscribers:        subscriberStore,
 	}, nil
 }
@@ -164,6 +187,10 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 	if text == "" {
 		return
 	}
+	if !strings.HasPrefix(text, "/") && b.hasHourlySession() {
+		b.handleHourlyDateInput(ctx, message.Chat.ID, text)
+		return
+	}
 	if !strings.HasPrefix(text, "/") && b.hasCreationSession() {
 		b.handleCreationInput(ctx, message.Chat.ID, text)
 		return
@@ -177,6 +204,8 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 	if !ok {
 		return
 	}
+	// Any explicit command abandons a partially entered hourly date.
+	b.clearHourlySession()
 
 	var response string
 	switch command {
@@ -184,11 +213,13 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		b.subscribers.Add(message.Chat.ID)
 		b.clearCreationSession()
 		b.clearEditSession()
+		b.clearHourlySession()
 		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
 		return
 	case "/menu", "/help":
 		b.clearCreationSession()
 		b.clearEditSession()
+		b.clearHourlySession()
 		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
 		return
 	case "/subscribe":
@@ -222,7 +253,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			break
 		}
 		b.clearCreationSession()
-		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromGreenhouse(query)))
+		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromGreenhouse(query), nil))
 		return
 	case "/ashby", "/ashbyhq":
 		b.clearEditSession()
@@ -243,7 +274,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			break
 		}
 		b.clearCreationSession()
-		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromAshby(saved)))
+		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromAshby(saved), nil))
 		return
 	case "/workday":
 		b.clearEditSession()
@@ -264,7 +295,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 			break
 		}
 		b.clearCreationSession()
-		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromWorkday(saved)))
+		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromWorkday(saved), nil))
 		return
 	case "/queries":
 		b.clearCreationSession()
@@ -293,6 +324,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 	case "/cancel":
 		b.clearCreationSession()
 		b.clearEditSession()
+		b.clearHourlySession()
 		b.sendScreen(ctx, message.Chat.ID, mainMenuScreen())
 		return
 	default:
@@ -457,7 +489,46 @@ func (b *Bot) NotifyDailyDigest(ctx context.Context, report daily.Report) error 
 	return errors.Join(sendErrors...)
 }
 
+// NotifyHourlyResults sends one query-scoped alert only when a scheduled search
+// returned matches. Empty result sets are intentionally silent.
+func (b *Bot) NotifyHourlyResults(ctx context.Context, query searchqueries.Query, found []jobs.Job) error {
+	if len(found) == 0 {
+		return nil
+	}
+	text := formatHourlyResults(query, found)
+	var sendErrors []error
+	for _, chatID := range b.subscribers.All() {
+		if _, err := b.api.SendMessage(ctx, tu.Message(tu.ID(chatID), text)); err != nil {
+			b.logger.Error("send hourly job alert", "chat_id", chatID, "query_id", query.ID, "error", err)
+			sendErrors = append(sendErrors, fmt.Errorf("send hourly alert to chat %d: %w", chatID, err))
+		}
+	}
+	return errors.Join(sendErrors...)
+}
+
 const maxDigestBytes = 3900
+
+func formatHourlyResults(query searchqueries.Query, found []jobs.Job) string {
+	var result strings.Builder
+	jobLabel := "jobs"
+	if len(found) == 1 {
+		jobLabel = "job"
+	}
+	fmt.Fprintf(&result, "Hourly job alert\n%s\n\n%d matching %s found:\n", query.Name, len(found), jobLabel)
+	included := 0
+	for i, job := range found {
+		entry := fmt.Sprintf("\n%d. %s", i+1, formatDigestJob(job))
+		if result.Len()+len(entry)+80 > maxDigestBytes {
+			break
+		}
+		result.WriteString(entry)
+		included++
+	}
+	if omitted := len(found) - included; omitted > 0 {
+		fmt.Fprintf(&result, "\n\n... and %d more matching jobs.", omitted)
+	}
+	return result.String()
+}
 
 func formatDailyDigest(report daily.Report) string {
 	failureNote := ""

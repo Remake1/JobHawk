@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -40,6 +41,7 @@ type creationSession struct {
 
 func (b *Bot) beginCreationSession() creationSession {
 	b.clearEditSession()
+	b.clearHourlySession()
 	b.creationMu.Lock()
 	defer b.creationMu.Unlock()
 	b.creation = &creationSession{step: creationSource}
@@ -48,6 +50,7 @@ func (b *Bot) beginCreationSession() creationSession {
 
 func (b *Bot) beginProviderCreation(source searchqueries.SourceType) creationSession {
 	b.clearEditSession()
+	b.clearHourlySession()
 	b.creationMu.Lock()
 	defer b.creationMu.Unlock()
 	b.creation = &creationSession{step: creationName, draft: creationDraft{SourceType: source}}
@@ -218,9 +221,11 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 	switch query.Data {
 	case callbackHome:
 		b.clearCreationSession()
+		b.clearHourlySession()
 		next = mainMenuScreen()
 	case callbackList:
 		b.clearCreationSession()
+		b.clearHourlySession()
 		queries, err := b.queryStore.List(ctx)
 		if err != nil {
 			b.callbackFailure(ctx, query, "Could not load search queries.", err)
@@ -231,6 +236,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		next = creationPromptScreen(b.beginCreationSession(), "")
 	case callbackRunDaily:
 		b.clearCreationSession()
+		b.clearHourlySession()
 		if b.dailyRunner == nil {
 			b.answerCallback(ctx, query.ID, "Daily runner is not configured.", true)
 			return
@@ -250,6 +256,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		next = creationPromptScreen(b.beginProviderCreation(searchqueries.SourceAshby), "")
 	case callbackCancel:
 		b.clearCreationSession()
+		b.clearHourlySession()
 		next = mainMenuScreen()
 		toast = "Creation cancelled"
 	case callbackRestart:
@@ -321,7 +328,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 			saved = queryFromGreenhouse(greenhouseQuery)
 		}
 		b.clearCreationSession()
-		next = queryDetailScreen(saved)
+		next = queryDetailScreen(saved, nil)
 		toast = "Search saved"
 	default:
 		action, id, ok := parseQueryCallback(query.Data)
@@ -337,7 +344,53 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		}
 		switch action {
 		case "view":
-			next = queryDetailScreen(queryRecord)
+			b.clearHourlySession()
+			subscription, subscriptionErr := b.subscriptionForQuery(ctx, queryRecord.ID)
+			if subscriptionErr != nil {
+				b.callbackFailure(ctx, query, "Could not load the hourly alert.", subscriptionErr)
+				return
+			}
+			next = queryDetailScreen(queryRecord, subscription)
+		case "hourly_create":
+			if b.hourlyStore == nil {
+				b.answerCallback(ctx, query.ID, "Hourly alerts are not configured.", true)
+				return
+			}
+			next = hourlyDatePromptScreen(b.beginHourlySession(queryRecord).query, "")
+		case "hourly_15", "hourly_30", "hourly_60":
+			session, exists := b.hourlySessionSnapshot()
+			if !exists || session.query.ID != queryRecord.ID || session.searchDate.IsZero() {
+				b.answerCallback(ctx, query.ID, "This hourly alert setup has expired. Start again.", true)
+				return
+			}
+			interval := 15
+			if action == "hourly_30" {
+				interval = 30
+			} else if action == "hourly_60" {
+				interval = 60
+			}
+			now := time.Now()
+			subscription, saveErr := b.hourlyStore.Upsert(ctx, queryRecord.ID, session.searchDate, interval, firstHourlyRun(session.searchDate, now, b.hourlyLocation))
+			if saveErr != nil {
+				b.callbackFailure(ctx, query, "Could not save the hourly alert.", saveErr)
+				return
+			}
+			b.clearHourlySession()
+			next = queryDetailScreen(queryRecord, &subscription)
+			toast = "Hourly alert created"
+		case "hourly_delete":
+			if b.hourlyStore == nil {
+				b.answerCallback(ctx, query.ID, "Hourly alerts are not configured.", true)
+				return
+			}
+			_, deleteErr := b.hourlyStore.DeleteByQueryID(ctx, queryRecord.ID)
+			if deleteErr != nil {
+				b.callbackFailure(ctx, query, "Could not delete the hourly alert.", deleteErr)
+				return
+			}
+			b.clearHourlySession()
+			next = queryDetailScreen(queryRecord, nil)
+			toast = "Hourly alert deleted"
 		case "edit":
 			session := b.beginEditSession(queryRecord, editNoField)
 			next = queryEditorScreen(session.query)
