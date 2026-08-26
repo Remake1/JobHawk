@@ -138,11 +138,7 @@ func editPromptScreen(session editSession, validationError string) screen {
 		current = valueOrAny(editable.Location)
 		clearAction = "clear_location"
 		canClear = editable.Location != "" && len(editable.Tags) > 0
-		if session.query.SourceType == searchqueries.SourceWorkday {
-			instruction = "Send the new location text. Workday locations use partial matching."
-		} else {
-			instruction = "Send the new location exactly as shown by the job board."
-		}
+		instruction = "Send the new location text. " + sourceName(session.query.SourceType) + " locations use partial matching."
 	case editTags:
 		title = "Edit tags"
 		current = wordsOrAny(editable.Tags)

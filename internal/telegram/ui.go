@@ -268,10 +268,13 @@ func creationPromptScreen(session creationSession, validationError string) scree
 		}
 	case creationLocation:
 		title = "Step 3 of 4 — Location"
-		if session.draft.SourceType == searchqueries.SourceWorkday {
+		switch session.draft.SourceType {
+		case searchqueries.SourceWorkday:
 			instruction = "Enter text that must occur anywhere in the Workday location.\n\nExample: Poland matches Krakow, Poland"
-		} else {
-			instruction = "Enter the exact location shown by " + sourceName(session.draft.SourceType) + ".\n\nExample: Warsaw, Poland"
+		case searchqueries.SourceGreenhouse:
+			instruction = "Enter text that must occur anywhere in the Greenhouse location.\n\nExample: Warsaw matches Warsaw, Poland (Hybrid)"
+		case searchqueries.SourceAshby:
+			instruction = "Enter text that must occur anywhere in an Ashby location.\n\nExample: Warsaw matches Warsaw, Poland"
 		}
 		rows = append(rows, tu.InlineKeyboardRow(callbackButton("Skip location", callbackSkipLoc)))
 	case creationTitleWords:

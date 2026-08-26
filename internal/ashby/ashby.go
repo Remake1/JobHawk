@@ -19,8 +19,9 @@ const defaultBaseURL = "https://api.ashbyhq.com/posting-api/job-board"
 
 var jobBoardPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// Filters is the JSONB payload stored for an Ashby search query. Location is
-// matched exactly and every title word must occur; matching is case-insensitive.
+// Filters is the JSONB payload stored for an Ashby search query. The location
+// must occur in one of the job's location values, and every title word must
+// occur in the title; matching is case-insensitive.
 type Filters struct {
 	JobBoard   string   `json:"job_board"`
 	Location   string   `json:"location,omitempty"`
@@ -218,8 +219,9 @@ func matchesFilters(candidate apiJob, filters Filters) bool {
 }
 
 func matchesLocation(candidate apiJob, location string) bool {
+	location = strings.ToLower(strings.TrimSpace(location))
 	for _, candidateLocation := range candidateLocations(candidate) {
-		if strings.EqualFold(candidateLocation, location) {
+		if strings.Contains(strings.ToLower(candidateLocation), location) {
 			return true
 		}
 	}

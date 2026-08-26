@@ -4,8 +4,8 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
 
 ## What is included
 
-- Typed Ashby and Greenhouse filters for board name/token, exact location, and
-  title words
+- Typed Ashby and Greenhouse filters for board name/token, location, and title
+  words
 - Workday CXS searches with tenant/site discovery from a job URL, partial
   location matching, and title-word filters
 - Persistent search queries with common columns and source-specific JSONB filters
@@ -84,9 +84,10 @@ Save an Ashby search using any job URL from the target board:
 JobHawk derives the board name (`snowflake`) and fetches its currently published
 jobs from `https://api.ashbyhq.com/posting-api/job-board/snowflake`. Location
 comparison checks Ashby's readable structured address and raw location label,
-including secondary locations; it is exact after trimming and case-insensitive.
-Every title word must be present, also case-insensitively. You can enter the
-board name instead of a full job URL in the command or guided flow.
+including secondary locations. A location matches when any of those values
+contains the configured location, case-insensitively. Every title word must be
+present, also case-insensitively. You can enter the board name instead of a full
+job URL in the command or guided flow.
 
 Save the Point72 example with this Telegram command:
 
@@ -94,7 +95,10 @@ Save the Point72 example with this Telegram command:
 /greenhouse Point72 SWE Internship 2027 | point72 | Warsaw, Poland | 2027, Internship, Software
 ```
 
-The four pipe-separated fields are the query name, Greenhouse board token, location, and comma-separated title words. Location comparison is exact after trimming and is case-insensitive. Every title word must be present, also case-insensitively.
+The four pipe-separated fields are the query name, Greenhouse board token,
+location, and comma-separated title words. A location matches when the
+Greenhouse `location.name` contains the configured location, case-insensitively.
+Every title word must be present, also case-insensitively.
 
 Save a Workday search with a public job URL from the target tenant and recruiting
 site:

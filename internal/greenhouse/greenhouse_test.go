@@ -7,14 +7,14 @@ import (
 	"testing"
 )
 
-func TestSearchFiltersByExactLocationAndAllTitleWords(t *testing.T) {
+func TestSearchFiltersByPartialLocationAndAllTitleWords(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/point72/jobs" {
 			t.Fatalf("request path = %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"jobs":[
-            {"id":8423978002,"absolute_url":"https://example.com/1","title":"2027 Software Engineer Internship","company_name":"Point72 ","first_published":"2026-08-03T20:06:28-04:00","location":{"name":"Warsaw, Poland"}},
+            {"id":8423978002,"absolute_url":"https://example.com/1","title":"2027 Software Engineer Internship","company_name":"Point72 ","first_published":"2026-08-03T20:06:28-04:00","location":{"name":"Warsaw, Poland (Hybrid)"}},
             {"id":2,"absolute_url":"https://example.com/2","title":"2027 Software Engineer","company_name":"Point72","first_published":"2026-08-03T20:06:28-04:00","location":{"name":"Warsaw, Poland"}},
             {"id":3,"absolute_url":"https://example.com/3","title":"2027 Software Engineer Internship","company_name":"Point72","first_published":"2026-08-03T20:06:28-04:00","location":{"name":"London, United Kingdom"}}
         ]}`))
@@ -24,7 +24,7 @@ func TestSearchFiltersByExactLocationAndAllTitleWords(t *testing.T) {
 	client := NewClientWithBaseURL(server.Client(), server.URL)
 	got, err := client.Search(context.Background(), Filters{
 		BoardToken: "point72",
-		Location:   "Warsaw, Poland",
+		Location:   "warsaw, POLAND",
 		TitleWords: []string{"2027", "Internship", "Software"},
 	})
 	if err != nil {

@@ -20,8 +20,9 @@ const defaultBaseURL = "https://boards-api.greenhouse.io/v1/boards"
 
 var boardTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// Filters is the JSONB payload stored for a Greenhouse search query. Every
-// title word must occur in the title; matching is case-insensitive.
+// Filters is the JSONB payload stored for a Greenhouse search query. The
+// location must occur in the job's location name, and every title word must
+// occur in the title; matching is case-insensitive.
 type Filters struct {
 	BoardToken string   `json:"board_token"`
 	Location   string   `json:"location,omitempty"`
@@ -166,7 +167,10 @@ type apiJob struct {
 }
 
 func matchesFilters(candidate apiJob, filters Filters) bool {
-	if filters.Location != "" && !strings.EqualFold(strings.TrimSpace(candidate.Location.Name), filters.Location) {
+	if filters.Location != "" && !strings.Contains(
+		strings.ToLower(strings.TrimSpace(candidate.Location.Name)),
+		strings.ToLower(filters.Location),
+	) {
 		return false
 	}
 	title := strings.ToLower(candidate.Title)

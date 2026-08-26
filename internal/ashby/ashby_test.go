@@ -23,7 +23,7 @@ func TestParseJobURLRejectsAnotherHost(t *testing.T) {
 	}
 }
 
-func TestSearchFiltersByExactLocationAndAllTitleWords(t *testing.T) {
+func TestSearchFiltersByPartialLocationAndAllTitleWords(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/snowflake" {
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
@@ -44,7 +44,7 @@ func TestSearchFiltersByExactLocationAndAllTitleWords(t *testing.T) {
 	client := NewClientWithBaseURL(server.Client(), server.URL)
 	got, err := client.Search(context.Background(), Filters{
 		JobBoard:   "snowflake",
-		Location:   " warsaw, POLAND ",
+		Location:   " warsaw ",
 		TitleWords: []string{"Software", "Query"},
 	})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestMatchesLocationIncludesSecondaryLocations(t *testing.T) {
 		Location: "PL-Warsaw-Lixa C",
 		Address:  apiPostalAddress{Locality: "Warsaw", Country: "Poland"},
 	}}
-	if !matchesLocation(candidate, "Warsaw, Poland") {
+	if !matchesLocation(candidate, "warsaw") {
 		t.Fatal("matchesLocation() did not match the structured secondary address")
 	}
 }
