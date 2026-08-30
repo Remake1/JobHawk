@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +226,67 @@ func TestQueryListLabelsShowProviderCompanyAndName(t *testing.T) {
 	for i, label := range want {
 		if got := list.keyboard.InlineKeyboard[i][0].Text; got != label {
 			t.Errorf("query button %d = %q, want %q", i, got, label)
+		}
+	}
+}
+
+func TestQueryListPaginatesManyQueries(t *testing.T) {
+	queries := make([]searchqueries.Query, 23)
+	filters := greenhouse.Filters{BoardToken: "example"}
+	for i := range queries {
+		queries[i] = searchqueries.Query{
+			ID: int64(i + 1), Name: "Query " + strconv.Itoa(i+1),
+			SourceType: searchqueries.SourceGreenhouse, Greenhouse: &filters,
+		}
+	}
+
+	first := queryListPageScreen(queries, 0)
+	if got := len(first.keyboard.InlineKeyboard); got != queryListPageSize+3 {
+		t.Fatalf("first page row count = %d, want %d", got, queryListPageSize+3)
+	}
+	if got := first.keyboard.InlineKeyboard[queryListPageSize][0].CallbackData; got != "m:list:1" {
+		t.Fatalf("first page next callback = %q", got)
+	}
+	if !strings.Contains(first.text, "23 saved · Page 1 of 3") {
+		t.Fatalf("first page text = %q", first.text)
+	}
+
+	last := queryListPageScreen(queries, 2)
+	if got := len(last.keyboard.InlineKeyboard); got != 6 {
+		t.Fatalf("last page row count = %d, want 6", got)
+	}
+	if got := last.keyboard.InlineKeyboard[3][0].CallbackData; got != "m:list:1" {
+		t.Fatalf("last page previous callback = %q", got)
+	}
+	if got := last.keyboard.InlineKeyboard[0][0].CallbackData; got != "q:view:21" {
+		t.Fatalf("last page first query callback = %q", got)
+	}
+}
+
+func TestQueryListPageClampsAfterDeletion(t *testing.T) {
+	queries := make([]searchqueries.Query, 20)
+	page := queryListPageScreen(queries, 2)
+	if !strings.Contains(page.text, "Page 2 of 2") {
+		t.Fatalf("clamped page text = %q", page.text)
+	}
+}
+
+func TestParseQueryListPageCallback(t *testing.T) {
+	tests := []struct {
+		data string
+		page int
+		ok   bool
+	}{
+		{data: callbackList, page: 0, ok: true},
+		{data: "m:list:2", page: 2, ok: true},
+		{data: "m:list:-1", ok: false},
+		{data: "m:list:nope", ok: false},
+		{data: "m:home", ok: false},
+	}
+	for _, tt := range tests {
+		page, ok := parseQueryListPageCallback(tt.data)
+		if page != tt.page || ok != tt.ok {
+			t.Errorf("parseQueryListPageCallback(%q) = (%d, %v), want (%d, %v)", tt.data, page, ok, tt.page, tt.ok)
 		}
 	}
 }

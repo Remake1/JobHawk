@@ -218,7 +218,13 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 	var next screen
 	var toast string
 	b.clearEditSession()
-	switch query.Data {
+	callbackData := query.Data
+	listPage := 0
+	if page, ok := parseQueryListPageCallback(callbackData); ok {
+		callbackData = callbackList
+		listPage = page
+	}
+	switch callbackData {
 	case callbackHome:
 		b.clearCreationSession()
 		b.clearHourlySession()
@@ -231,7 +237,7 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 			b.callbackFailure(ctx, query, "Could not load search queries.", err)
 			return
 		}
-		next = queryListScreen(queries)
+		next = queryListPageScreen(queries, listPage)
 	case callbackAdd:
 		next = creationPromptScreen(b.beginCreationSession(), "")
 	case callbackRunDaily:

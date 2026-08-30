@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	queryListPageSize = 10
+
 	callbackHome       = "m:home"
 	callbackList       = "m:list"
 	callbackAdd        = "m:add"
@@ -57,12 +59,31 @@ func mainMenuScreen() screen {
 }
 
 func queryListScreen(queries []searchqueries.Query) screen {
-	rows := make([][]telego.InlineKeyboardButton, 0, len(queries)+2)
-	for _, query := range queries {
+	return queryListPageScreen(queries, 0)
+}
+
+func queryListPageScreen(queries []searchqueries.Query, page int) screen {
+	pageCount := max(1, (len(queries)+queryListPageSize-1)/queryListPageSize)
+	page = min(max(page, 0), pageCount-1)
+	start := page * queryListPageSize
+	end := min(start+queryListPageSize, len(queries))
+
+	rows := make([][]telego.InlineKeyboardButton, 0, end-start+3)
+	for _, query := range queries[start:end] {
 		rows = append(rows, tu.InlineKeyboardRow(callbackButton(
 			truncateButtonText(queryListLabel(query)),
 			queryCallback("view", query.ID),
 		)))
+	}
+	if pageCount > 1 {
+		navigation := make([]telego.InlineKeyboardButton, 0, 2)
+		if page > 0 {
+			navigation = append(navigation, callbackButton("← Previous", queryListPageCallback(page-1)))
+		}
+		if page < pageCount-1 {
+			navigation = append(navigation, callbackButton("Next →", queryListPageCallback(page+1)))
+		}
+		rows = append(rows, tu.InlineKeyboardRow(navigation...))
 	}
 	rows = append(rows,
 		tu.InlineKeyboardRow(callbackButton("➕ Add search query", callbackAdd)),
@@ -79,8 +100,27 @@ func queryListScreen(queries []searchqueries.Query) screen {
 	return formattedScreen(
 		tu.InlineKeyboard(rows...),
 		tu.Entity("Search queries").Bold(),
-		tu.Entityf("\n\n%d saved. Select one to manage it.", len(queries)),
+		tu.Entityf("\n\n%d saved · Page %d of %d\nSelect one to manage it.", len(queries), page+1, pageCount),
 	)
+}
+
+func queryListPageCallback(page int) string {
+	return callbackList + ":" + strconv.Itoa(page)
+}
+
+func parseQueryListPageCallback(data string) (int, bool) {
+	if data == callbackList {
+		return 0, true
+	}
+	prefix := callbackList + ":"
+	if !strings.HasPrefix(data, prefix) {
+		return 0, false
+	}
+	page, err := strconv.Atoi(strings.TrimPrefix(data, prefix))
+	if err != nil || page < 0 {
+		return 0, false
+	}
+	return page, true
 }
 
 func queryListLabel(query searchqueries.Query) string {
