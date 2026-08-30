@@ -71,3 +71,35 @@ func TestFiltersRequireURLAndNoJobsText(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeURLRepairsDoubleEncodedQueryLiterals(t *testing.T) {
+	input := "https://www.metacareers.com/jobsearch/?teams[0]=Internship%2520-%2520Engineering%252C%2520Tech%2520%2526%2520Design&roles[0]=Internship"
+	want := "https://www.metacareers.com/jobsearch/?teams%5B0%5D=Internship+-+Engineering%2C+Tech+%26+Design&roles%5B0%5D=Internship"
+
+	got, err := NormalizeURL(input)
+	if err != nil {
+		t.Fatalf("NormalizeURL() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("NormalizeURL() = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeURLPreservesOrderDuplicatesAndLiteralPlus(t *testing.T) {
+	input := "https://example.com/jobs?tag=C%2B%2B&location=New%2520York&tag=Go"
+	want := "https://example.com/jobs?tag=C%2B%2B&location=New+York&tag=Go"
+
+	got, err := NormalizeURL(input)
+	if err != nil {
+		t.Fatalf("NormalizeURL() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("NormalizeURL() = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeURLRejectsMalformedQueryEscape(t *testing.T) {
+	if _, err := NormalizeURL("https://example.com/jobs?location=%zz"); err == nil {
+		t.Fatal("NormalizeURL() expected a malformed query escape error")
+	}
+}

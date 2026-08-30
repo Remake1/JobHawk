@@ -53,8 +53,74 @@ func NormalizeURL(value string) (string, error) {
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", errors.New("enter a valid HTTP or HTTPS job board URL")
 	}
+	normalizedQuery, err := normalizeQuery(parsed.RawQuery)
+	if err != nil {
+		return "", err
+	}
+	parsed.RawQuery = normalizedQuery
 	parsed.Fragment = ""
 	return parsed.String(), nil
+}
+
+// normalizeQuery canonicalizes each key and value without sorting parameters
+// or collapsing duplicates. QueryUnescape handles the normal encoding layer;
+// decodeExtraLayer repairs one common accidental second layer such as %2520.
+func normalizeQuery(rawQuery string) (string, error) {
+	if rawQuery == "" {
+		return "", nil
+	}
+	parts := strings.Split(rawQuery, "&")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		rawKey, rawValue, hasValue := strings.Cut(part, "=")
+		key, err := url.QueryUnescape(rawKey)
+		if err != nil {
+			return "", errors.New("job board URL contains an invalid query parameter name")
+		}
+		value := ""
+		if hasValue {
+			value, err = url.QueryUnescape(rawValue)
+			if err != nil {
+				return "", fmt.Errorf("job board URL contains an invalid value for query parameter %q", key)
+			}
+		}
+		key = decodeExtraLayer(key)
+		value = decodeExtraLayer(value)
+		parts[i] = url.QueryEscape(key)
+		if hasValue {
+			parts[i] += "=" + url.QueryEscape(value)
+		}
+	}
+	return strings.Join(parts, "&"), nil
+}
+
+// decodeExtraLayer decodes at most one additional percent-encoding layer.
+// PathUnescape is intentional: unlike QueryUnescape it leaves literal plus
+// signs alone after the first, normal query decoding pass.
+func decodeExtraLayer(value string) string {
+	if !hasPercentEscape(value) {
+		return value
+	}
+	decoded, err := url.PathUnescape(value)
+	if err != nil {
+		return value
+	}
+	return decoded
+}
+
+func hasPercentEscape(value string) bool {
+	for i := 0; i+2 < len(value); i++ {
+		if value[i] == '%' && isHex(value[i+1]) && isHex(value[i+2]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHex(value byte) bool {
+	return value >= '0' && value <= '9' || value >= 'a' && value <= 'f' || value >= 'A' && value <= 'F'
 }
 
 type Client struct {

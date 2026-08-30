@@ -127,6 +127,8 @@ case-sensitive fragment. If the fragment is present, the search is empty. If it
 is absent, JobHawk returns one availability result linked to the filtered page;
 it does not attempt to extract individual posting details. HTTP failures and
 oversized responses are reported as query failures rather than job matches.
+When saving a URL, JobHawk also canonicalizes query-string literals and repairs
+one accidental extra percent-encoding layer, such as `%2520` instead of `%20`.
 
 Run or inspect saved queries:
 
