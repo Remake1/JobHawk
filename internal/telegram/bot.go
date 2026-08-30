@@ -19,12 +19,14 @@ import (
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
 	"jobhawk/internal/subscribers"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
 type queryStore interface {
 	SaveAshby(context.Context, string, ashby.Filters) (searchqueries.AshbyQuery, error)
 	SaveGreenhouse(context.Context, string, greenhouse.Filters) (searchqueries.GreenhouseQuery, error)
+	SaveText(context.Context, string, textsearch.Filters) (searchqueries.TextQuery, error)
 	SaveWorkday(context.Context, string, workday.Filters) (searchqueries.WorkdayQuery, error)
 	Get(context.Context, string) (searchqueries.Query, error)
 	GetByID(context.Context, int64) (searchqueries.Query, error)
@@ -45,6 +47,10 @@ type workdaySearcher interface {
 	Search(context.Context, workday.Filters) ([]jobs.Job, error)
 }
 
+type textSearcher interface {
+	Search(context.Context, textsearch.Filters) ([]jobs.Job, error)
+}
+
 type dailyJobRunner interface {
 	RunOnce(context.Context) error
 }
@@ -62,6 +68,7 @@ type Bot struct {
 	queryStore         queryStore
 	ashbySearcher      ashbySearcher
 	greenhouseSearcher greenhouseSearcher
+	textSearcher       textSearcher
 	workdaySearcher    workdaySearcher
 	dailyRunner        dailyJobRunner
 	hourlyStore        hourlySubscriptionStore
@@ -120,6 +127,7 @@ func NewWithProviders(
 	workdaySearcher workdaySearcher,
 	ashbySearcher ashbySearcher,
 	logger *slog.Logger,
+	textSearchers ...textSearcher,
 ) (*Bot, error) {
 	api, err := telego.NewBot(token)
 	if err != nil {
@@ -129,6 +137,10 @@ func NewWithProviders(
 	// This is a single-user bot, so daily delivery is active by default after
 	// every restart. The existing subscribe commands can still pause/resume it.
 	subscriberStore.Add(allowedChatID)
+	text := textSearcher(textsearch.NewClient(nil))
+	if len(textSearchers) > 0 && textSearchers[0] != nil {
+		text = textSearchers[0]
+	}
 
 	return &Bot{
 		api:                api,
@@ -137,6 +149,7 @@ func NewWithProviders(
 		queryStore:         queryStore,
 		ashbySearcher:      ashbySearcher,
 		greenhouseSearcher: greenhouseSearcher,
+		textSearcher:       text,
 		workdaySearcher:    workdaySearcher,
 		hourlyLocation:     time.Local,
 		subscribers:        subscriberStore,
@@ -297,6 +310,27 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 		b.clearCreationSession()
 		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromWorkday(saved), nil))
 		return
+	case "/text":
+		b.clearEditSession()
+		if strings.TrimSpace(args) == "" {
+			session := b.beginProviderCreation(searchqueries.SourceText)
+			b.sendScreen(ctx, message.Chat.ID, creationPromptScreen(session, ""))
+			return
+		}
+		name, filters, err := parseTextArgs(args)
+		if err != nil {
+			response = err.Error() + "\n\n" + textUsage()
+			break
+		}
+		saved, err := b.queryStore.SaveText(ctx, name, filters)
+		if err != nil {
+			b.logger.Error("save text search query", "name", name, "error", err)
+			response = "Could not save the text search: " + err.Error()
+			break
+		}
+		b.clearCreationSession()
+		b.sendScreen(ctx, message.Chat.ID, queryDetailScreen(queryFromText(saved), nil))
+		return
 	case "/queries":
 		b.clearCreationSession()
 		b.clearEditSession()
@@ -429,6 +463,26 @@ func workdayUsage() string {
 	return "Usage:\n/workday <name> | <Workday job URL> | <partial location> | <comma-separated title words>\n\nExample:\n/workday State Street Working Student | https://statestreet.wd1.myworkdayjobs.com/Global/job/Munich-Germany/Working-Student_R-795614-1/apply | Poland | Working, Student"
 }
 
+func parseTextArgs(args string) (string, textsearch.Filters, error) {
+	parts := strings.SplitN(args, "|", 3)
+	if len(parts) != 3 {
+		return "", textsearch.Filters{}, errors.New("expected three fields separated by |")
+	}
+	name := strings.TrimSpace(parts[0])
+	if name == "" {
+		return "", textsearch.Filters{}, errors.New("query name is required")
+	}
+	filters, err := (textsearch.Filters{URL: parts[1], NoJobsText: parts[2]}).Normalize()
+	if err != nil {
+		return "", textsearch.Filters{}, err
+	}
+	return name, filters, nil
+}
+
+func textUsage() string {
+	return "Usage:\n/text <name> | <filtered job board URL> | <text shown when no jobs are found>\n\nExample:\n/text Google internships | https://www.google.com/about/careers/applications/jobs/results?location=Poland | Search again or try updating your filters"
+}
+
 func (b *Bot) runQuery(ctx context.Context, query searchqueries.Query) ([]jobs.Job, error) {
 	switch query.SourceType {
 	case searchqueries.SourceAshby:
@@ -446,6 +500,11 @@ func (b *Bot) runQuery(ctx context.Context, query searchqueries.Query) ([]jobs.J
 			return nil, errors.New("Workday filters are missing")
 		}
 		return b.workdaySearcher.Search(ctx, *query.Workday)
+	case searchqueries.SourceText:
+		if query.Text == nil {
+			return nil, errors.New("text search filters are missing")
+		}
+		return b.textSearcher.Search(ctx, *query.Text)
 	default:
 		return nil, fmt.Errorf("unsupported source %q", query.SourceType)
 	}

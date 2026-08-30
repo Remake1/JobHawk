@@ -12,6 +12,7 @@ import (
 	"jobhawk/internal/ashby"
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/searchqueries"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -31,6 +32,7 @@ type creationDraft struct {
 	SourceType searchqueries.SourceType
 	Ashby      ashby.Filters
 	Greenhouse greenhouse.Filters
+	Text       textsearch.Filters
 	Workday    workday.Filters
 }
 
@@ -114,8 +116,16 @@ func (b *Bot) handleCreationInput(ctx context.Context, chatID int64, input strin
 	case creationBoard:
 		var ashbyFilters ashby.Filters
 		var greenhouseFilters greenhouse.Filters
+		var textFilters textsearch.Filters
 		var workdayFilters workday.Filters
 		switch session.draft.SourceType {
+		case searchqueries.SourceText:
+			requestURL, validationErr := textsearch.NormalizeURL(input)
+			if validationErr != nil {
+				b.sendScreen(ctx, chatID, creationPromptScreen(session, validationErr.Error()))
+				return
+			}
+			textFilters = textsearch.Filters{URL: requestURL}
 		case searchqueries.SourceWorkday:
 			host, tenant, site, validationErr := workday.ParseJobURL(input)
 			if validationErr != nil {
@@ -141,11 +151,27 @@ func (b *Bot) handleCreationInput(ctx context.Context, chatID int64, input strin
 		next, err = b.updateCreationSession(creationBoard, func(current *creationSession) error {
 			current.draft.Ashby = ashbyFilters
 			current.draft.Greenhouse = greenhouseFilters
+			current.draft.Text = textFilters
 			current.draft.Workday = workdayFilters
 			current.step = creationLocation
 			return nil
 		})
 	case creationLocation:
+		if session.draft.SourceType == searchqueries.SourceText {
+			filters := session.draft.Text
+			filters.NoJobsText = input
+			normalized, validationErr := filters.Normalize()
+			if validationErr != nil {
+				b.sendScreen(ctx, chatID, creationPromptScreen(session, validationErr.Error()))
+				return
+			}
+			next, err = b.updateCreationSession(creationLocation, func(current *creationSession) error {
+				current.draft.Text = normalized
+				current.step = creationReview
+				return nil
+			})
+			break
+		}
 		location := strings.TrimSpace(input)
 		if len([]rune(location)) > 200 {
 			b.sendScreen(ctx, chatID, creationPromptScreen(session, "Location must be 200 characters or fewer."))
@@ -260,6 +286,8 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		next = creationPromptScreen(b.beginProviderCreation(searchqueries.SourceWorkday), "")
 	case callbackAshby:
 		next = creationPromptScreen(b.beginProviderCreation(searchqueries.SourceAshby), "")
+	case callbackText:
+		next = creationPromptScreen(b.beginProviderCreation(searchqueries.SourceText), "")
 	case callbackCancel:
 		b.clearCreationSession()
 		b.clearHourlySession()
@@ -325,6 +353,13 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 				return
 			}
 			saved = queryFromAshby(ashbyQuery)
+		case searchqueries.SourceText:
+			textQuery, err := b.queryStore.SaveText(ctx, session.draft.Name, session.draft.Text)
+			if err != nil {
+				b.callbackFailure(ctx, query, "Could not save the search.", err)
+				return
+			}
+			saved = queryFromText(textQuery)
 		default:
 			greenhouseQuery, err := b.queryStore.SaveGreenhouse(ctx, session.draft.Name, session.draft.Greenhouse)
 			if err != nil {
@@ -582,6 +617,9 @@ func queryFromDraft(draft creationDraft) searchqueries.Query {
 	case searchqueries.SourceAshby:
 		filters := draft.Ashby
 		query.Ashby = &filters
+	case searchqueries.SourceText:
+		filters := draft.Text
+		query.Text = &filters
 	default:
 		filters := draft.Greenhouse
 		query.Greenhouse = &filters
@@ -598,7 +636,7 @@ func queryFromAshby(query searchqueries.AshbyQuery) searchqueries.Query {
 }
 
 func isSupportedSource(source searchqueries.SourceType) bool {
-	return source == searchqueries.SourceAshby || source == searchqueries.SourceGreenhouse || source == searchqueries.SourceWorkday
+	return source == searchqueries.SourceAshby || source == searchqueries.SourceGreenhouse || source == searchqueries.SourceText || source == searchqueries.SourceWorkday
 }
 
 func queryFromGreenhouse(query searchqueries.GreenhouseQuery) searchqueries.Query {
@@ -614,5 +652,13 @@ func queryFromWorkday(query searchqueries.WorkdayQuery) searchqueries.Query {
 	return searchqueries.Query{
 		ID: query.ID, Name: query.Name, SourceType: searchqueries.SourceWorkday,
 		Workday: &filters, Enabled: query.Enabled, CreatedAt: query.CreatedAt, UpdatedAt: query.UpdatedAt,
+	}
+}
+
+func queryFromText(query searchqueries.TextQuery) searchqueries.Query {
+	filters := query.Filters
+	return searchqueries.Query{
+		ID: query.ID, Name: query.Name, SourceType: searchqueries.SourceText,
+		Text: &filters, Enabled: query.Enabled, CreatedAt: query.CreatedAt, UpdatedAt: query.UpdatedAt,
 	}
 }

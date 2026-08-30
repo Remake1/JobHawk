@@ -11,6 +11,7 @@ import (
 	"jobhawk/internal/ashby"
 	"jobhawk/internal/database/db"
 	"jobhawk/internal/greenhouse"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -19,6 +20,7 @@ type SourceType string
 const (
 	SourceAshby      SourceType = "ashby"
 	SourceGreenhouse SourceType = "greenhouse"
+	SourceText       SourceType = "text"
 	SourceWorkday    SourceType = "workday"
 )
 
@@ -28,6 +30,7 @@ type Query struct {
 	SourceType SourceType
 	Ashby      *ashby.Filters
 	Greenhouse *greenhouse.Filters
+	Text       *textsearch.Filters
 	Workday    *workday.Filters
 	Enabled    bool
 	CreatedAt  time.Time
@@ -64,6 +67,15 @@ type WorkdayQuery struct {
 	ID        int64
 	Name      string
 	Filters   workday.Filters
+	Enabled   bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type TextQuery struct {
+	ID        int64
+	Name      string
+	Filters   textsearch.Filters
 	Enabled   bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -149,6 +161,30 @@ func (s *Store) SaveWorkday(ctx context.Context, name string, filters workday.Fi
 		return WorkdayQuery{}, fmt.Errorf("save Workday search query: %w", err)
 	}
 	return decodeWorkday(row)
+}
+
+func (s *Store) SaveText(ctx context.Context, name string, filters textsearch.Filters) (TextQuery, error) {
+	name, err := normalizeName(name)
+	if err != nil {
+		return TextQuery{}, err
+	}
+	filters, err = filters.Normalize()
+	if err != nil {
+		return TextQuery{}, err
+	}
+	payload, err := json.Marshal(filters)
+	if err != nil {
+		return TextQuery{}, fmt.Errorf("encode text search filters: %w", err)
+	}
+	row, err := s.queries.UpsertSearchQuery(ctx, db.UpsertSearchQueryParams{
+		Name:       name,
+		SourceType: string(SourceText),
+		Filters:    payload,
+	})
+	if err != nil {
+		return TextQuery{}, fmt.Errorf("save text search query: %w", err)
+	}
+	return decodeText(row)
 }
 
 func normalizeName(name string) (string, error) {
@@ -261,6 +297,8 @@ func applyEditableFilters(query Query, editable EditableFilters) (Query, error) 
 			return Query{}, err
 		}
 		query.Workday = &normalized
+	case SourceText:
+		return Query{}, errors.New("text search filters cannot be edited; recreate the query instead")
 	default:
 		return Query{}, fmt.Errorf("query %q has unsupported source type %q", query.Name, query.SourceType)
 	}
@@ -276,6 +314,8 @@ func encodeQueryFilters(query Query) (json.RawMessage, error) {
 		filters = query.Greenhouse
 	case SourceWorkday:
 		filters = query.Workday
+	case SourceText:
+		filters = query.Text
 	default:
 		return nil, fmt.Errorf("query %q has unsupported source type %q", query.Name, query.SourceType)
 	}
@@ -460,6 +500,24 @@ func decodeWorkday(row db.SearchQuery) (WorkdayQuery, error) {
 	}, nil
 }
 
+func decodeText(row db.SearchQuery) (TextQuery, error) {
+	if SourceType(row.SourceType) != SourceText {
+		return TextQuery{}, fmt.Errorf("query %q has source type %q, not %q", row.Name, row.SourceType, SourceText)
+	}
+	var filters textsearch.Filters
+	if err := json.Unmarshal(row.Filters, &filters); err != nil {
+		return TextQuery{}, fmt.Errorf("decode filters for query %q: %w", row.Name, err)
+	}
+	filters, err := filters.Normalize()
+	if err != nil {
+		return TextQuery{}, fmt.Errorf("validate filters for query %q: %w", row.Name, err)
+	}
+	return TextQuery{
+		ID: row.ID, Name: row.Name, Filters: filters, Enabled: row.Enabled,
+		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+	}, nil
+}
+
 func decodeQuery(row db.SearchQuery) (Query, error) {
 	query := Query{
 		ID:         row.ID,
@@ -488,6 +546,12 @@ func decodeQuery(row db.SearchQuery) (Query, error) {
 			return Query{}, err
 		}
 		query.Workday = &decoded.Filters
+	case SourceText:
+		decoded, err := decodeText(row)
+		if err != nil {
+			return Query{}, err
+		}
+		query.Text = &decoded.Filters
 	default:
 		return Query{}, fmt.Errorf("query %q has unsupported source type %q", row.Name, row.SourceType)
 	}

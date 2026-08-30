@@ -12,6 +12,7 @@ import (
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -41,6 +42,10 @@ type workdaySearcher interface {
 	Search(context.Context, workday.Filters) ([]jobs.Job, error)
 }
 
+type textSearcher interface {
+	Search(context.Context, textsearch.Filters) ([]jobs.Job, error)
+}
+
 type Runner struct {
 	runMu         sync.Mutex
 	subscriptions subscriptionStore
@@ -48,17 +53,22 @@ type Runner struct {
 	notifier      notifier
 	ashby         ashbySearcher
 	greenhouse    greenhouseSearcher
+	text          textSearcher
 	workday       workdaySearcher
 	location      *time.Location
 }
 
-func NewRunner(subscriptions subscriptionStore, queries queryStore, notifier notifier, ashby ashbySearcher, greenhouse greenhouseSearcher, workday workdaySearcher, location *time.Location) *Runner {
+func NewRunner(subscriptions subscriptionStore, queries queryStore, notifier notifier, ashby ashbySearcher, greenhouse greenhouseSearcher, workday workdaySearcher, location *time.Location, textSearchers ...textSearcher) *Runner {
 	if location == nil {
 		location = time.Local
 	}
+	text := textSearcher(textsearch.NewClient(nil))
+	if len(textSearchers) > 0 && textSearchers[0] != nil {
+		text = textSearchers[0]
+	}
 	return &Runner{
 		subscriptions: subscriptions, queries: queries, notifier: notifier,
-		ashby: ashby, greenhouse: greenhouse, workday: workday, location: location,
+		ashby: ashby, greenhouse: greenhouse, text: text, workday: workday, location: location,
 	}
 }
 
@@ -120,6 +130,11 @@ func (r *Runner) search(ctx context.Context, query searchqueries.Query) ([]jobs.
 			return nil, errors.New("Workday filters are missing")
 		}
 		return r.workday.Search(ctx, *query.Workday)
+	case searchqueries.SourceText:
+		if query.Text == nil {
+			return nil, errors.New("text search filters are missing")
+		}
+		return r.text.Search(ctx, *query.Text)
 	default:
 		return nil, fmt.Errorf("unsupported source %q", query.SourceType)
 	}

@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -27,6 +28,7 @@ const (
 	callbackRestart    = "w:restart"
 	callbackAshby      = "w:ashby"
 	callbackGreenhouse = "w:greenhouse"
+	callbackText       = "w:text"
 	callbackWorkday    = "w:workday"
 )
 
@@ -141,6 +143,15 @@ func queryCompany(query searchqueries.Query) string {
 		if query.Workday != nil {
 			return query.Workday.Tenant
 		}
+	case searchqueries.SourceText:
+		if query.Text != nil {
+			parsed, _ := url.Parse(query.Text.URL)
+			hostname := parsed.Hostname()
+			if strings.HasPrefix(strings.ToLower(hostname), "www.") {
+				hostname = hostname[len("www."):]
+			}
+			return hostname
+		}
 	}
 	return "unknown"
 }
@@ -150,11 +161,12 @@ func queryDetailScreen(query searchqueries.Query, subscription *hourly.Subscript
 	if subscription != nil {
 		hourlyButton = callbackButton("⏱ Delete hourly alert", queryCallback("hourly_delete", query.ID))
 	}
+	actions := tu.InlineKeyboardRow(callbackButton("▶ Run query", queryCallback("run", query.ID)))
+	if query.SourceType != searchqueries.SourceText {
+		actions = append(actions, callbackButton("✏️ Edit query", queryCallback("edit", query.ID)))
+	}
 	keyboard := tu.InlineKeyboard(
-		tu.InlineKeyboardRow(
-			callbackButton("▶ Run query", queryCallback("run", query.ID)),
-			callbackButton("✏️ Edit query", queryCallback("edit", query.ID)),
-		),
+		actions,
 		tu.InlineKeyboardRow(hourlyButton),
 		tu.InlineKeyboardRow(callbackButton("🗑 Delete", queryCallback("delete", query.ID))),
 		tu.InlineKeyboardRow(callbackButton("← Search queries", callbackList)),
@@ -290,12 +302,16 @@ func creationPromptScreen(session creationSession, validationError string) scree
 			tu.InlineKeyboardRow(callbackButton(sourceLabel(searchqueries.SourceGreenhouse), callbackGreenhouse)),
 			tu.InlineKeyboardRow(callbackButton(sourceLabel(searchqueries.SourceWorkday), callbackWorkday)),
 			tu.InlineKeyboardRow(callbackButton(sourceLabel(searchqueries.SourceAshby), callbackAshby)),
+			tu.InlineKeyboardRow(callbackButton(sourceLabel(searchqueries.SourceText), callbackText)),
 		)
 	case creationName:
-		title = "Step 1 of 4 — Name"
+		title = "Step 1 of " + creationStepCount(session.draft.SourceType) + " — Name"
 		instruction = "Give this search a short, recognizable name.\n\nExample: " + creationNameExample(session.draft.SourceType)
 	case creationBoard:
 		switch session.draft.SourceType {
+		case searchqueries.SourceText:
+			title = "Step 2 of 3 — Filtered job board URL"
+			instruction = "Paste the full job board results URL, including all filters.\n\nExample: https://www.google.com/about/careers/applications/jobs/results?location=Poland&target_level=INTERN_AND_APPRENTICE"
 		case searchqueries.SourceWorkday:
 			title = "Step 2 of 4 — Workday job URL"
 			instruction = "Paste any public job URL from the Workday site you want to search.\n\nExample: https://statestreet.wd1.myworkdayjobs.com/Global/job/Munich-Germany/Working-Student_R-795614-1/apply"
@@ -307,6 +323,11 @@ func creationPromptScreen(session creationSession, validationError string) scree
 			instruction = "Enter the board token from the Greenhouse URL.\n\nExample: point72"
 		}
 	case creationLocation:
+		if session.draft.SourceType == searchqueries.SourceText {
+			title = "Step 3 of 3 — Empty-results text"
+			instruction = "Enter the exact text shown on the page when no jobs match. If this text is absent, JobHawk reports that matching jobs are available.\n\nExample: Search again or try updating your filters"
+			break
+		}
 		title = "Step 3 of 4 — Location"
 		switch session.draft.SourceType {
 		case searchqueries.SourceWorkday:
@@ -344,6 +365,8 @@ func draftLocation(draft creationDraft) string {
 		return draft.Workday.Location
 	case searchqueries.SourceAshby:
 		return draft.Ashby.Location
+	case searchqueries.SourceText:
+		return ""
 	default:
 		return draft.Greenhouse.Location
 	}
@@ -410,6 +433,16 @@ func querySummaryParts(query searchqueries.Query) []tu.MessageEntityCollection {
 			tu.Entity("\n\nTitle contains every word\n"),
 			tu.Entity(wordsOrAny(query.Workday.TitleWords)).Code(),
 		)
+	case searchqueries.SourceText:
+		if query.Text == nil {
+			return append(parts, tu.Entity("\n\nInvalid text search filters").Bold())
+		}
+		parts = append(parts,
+			tu.Entity("\n\nFiltered URL\n"),
+			tu.Entity(truncateDisplayText(query.Text.URL, 1_500)).Code(),
+			tu.Entity("\n\nText meaning no jobs\n"),
+			tu.Entity(truncateDisplayText(query.Text.NoJobsText, 1_500)).Code(),
+		)
 	}
 	return parts
 }
@@ -426,6 +459,8 @@ func sourceEmoji(source searchqueries.SourceType) string {
 		return "🐸"
 	case searchqueries.SourceWorkday:
 		return "🦋"
+	case searchqueries.SourceText:
+		return "📝"
 	default:
 		return "🔎"
 	}
@@ -439,6 +474,8 @@ func sourceName(source searchqueries.SourceType) string {
 		return "Greenhouse"
 	case searchqueries.SourceWorkday:
 		return "Workday"
+	case searchqueries.SourceText:
+		return "Text search"
 	default:
 		return "job board"
 	}
@@ -450,9 +487,18 @@ func creationNameExample(source searchqueries.SourceType) string {
 		return "State Street Working Student"
 	case searchqueries.SourceAshby:
 		return "Snowflake Software Engineer"
+	case searchqueries.SourceText:
+		return "Google Poland internships"
 	default:
 		return "Point72 SWE Internship 2027"
 	}
+}
+
+func creationStepCount(source searchqueries.SourceType) string {
+	if source == searchqueries.SourceText {
+		return "3"
+	}
+	return "4"
 }
 
 func queryCallback(action string, id int64) string {

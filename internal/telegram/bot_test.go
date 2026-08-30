@@ -12,6 +12,7 @@ import (
 	"jobhawk/internal/hourly"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -128,6 +129,16 @@ func TestParseWorkdayArgs(t *testing.T) {
 	}
 }
 
+func TestParseTextArgsPreservesFilteredURLAndFragment(t *testing.T) {
+	name, filters, err := parseTextArgs("Google Poland | https://example.com/jobs?location=Poland&level=intern | Search again or try updating your filters")
+	if err != nil {
+		t.Fatalf("parseTextArgs() error = %v", err)
+	}
+	if name != "Google Poland" || filters.URL != "https://example.com/jobs?location=Poland&level=intern" || filters.NoJobsText != "Search again or try updating your filters" {
+		t.Fatalf("parseTextArgs() = %q, %+v", name, filters)
+	}
+}
+
 func TestMainMenuScreenHasButtons(t *testing.T) {
 	menu := mainMenuScreen()
 	if len(menu.entities) == 0 || menu.keyboard == nil || len(menu.keyboard.InlineKeyboard) != 3 {
@@ -143,11 +154,24 @@ func TestMainMenuScreenHasButtons(t *testing.T) {
 
 func TestCreationSourceButtonsIncludeProviderEmojis(t *testing.T) {
 	prompt := creationPromptScreen(creationSession{step: creationSource}, "")
-	want := []string{"🐸 Greenhouse", "🦋 Workday", "🔮 AshbyHQ"}
+	want := []string{"🐸 Greenhouse", "🦋 Workday", "🔮 AshbyHQ", "📝 Text search"}
 	for i, label := range want {
 		if got := prompt.keyboard.InlineKeyboard[i][0].Text; got != label {
 			t.Errorf("provider button %d = %q, want %q", i, got, label)
 		}
+	}
+}
+
+func TestTextQueryDetailHasNoUnsupportedEditAction(t *testing.T) {
+	filters := textsearch.Filters{URL: "https://example.com/jobs?location=Poland", NoJobsText: "No matching jobs"}
+	detail := queryDetailScreen(searchqueries.Query{
+		ID: 44, Name: "Google Poland", SourceType: searchqueries.SourceText, Text: &filters,
+	}, nil)
+	if len(detail.keyboard.InlineKeyboard[0]) != 1 || detail.keyboard.InlineKeyboard[0][0].CallbackData != "q:run:44" {
+		t.Fatalf("text query actions = %+v", detail.keyboard.InlineKeyboard[0])
+	}
+	if !strings.Contains(detail.text, filters.URL) || !strings.Contains(detail.text, filters.NoJobsText) {
+		t.Fatalf("text query detail = %q", detail.text)
 	}
 }
 
@@ -226,6 +250,23 @@ func TestQueryListLabelsShowProviderCompanyAndName(t *testing.T) {
 	for i, label := range want {
 		if got := list.keyboard.InlineKeyboard[i][0].Text; got != label {
 			t.Errorf("query button %d = %q, want %q", i, got, label)
+		}
+	}
+}
+
+func TestTextQueryListLabelOmitsWWWHostnamePrefix(t *testing.T) {
+	tests := []struct {
+		url  string
+		want string
+	}{
+		{url: "https://google.com/jobs?location=Poland", want: "📝 | google.com | Google Poland"},
+		{url: "https://www.google.com/jobs?location=Poland", want: "📝 | google.com | Google Poland"},
+	}
+	for _, tt := range tests {
+		filters := textsearch.Filters{URL: tt.url, NoJobsText: "No jobs"}
+		query := searchqueries.Query{Name: "Google Poland", SourceType: searchqueries.SourceText, Text: &filters}
+		if got := queryListLabel(query); got != tt.want {
+			t.Errorf("queryListLabel(%q) = %q, want %q", tt.url, got, tt.want)
 		}
 	}
 }

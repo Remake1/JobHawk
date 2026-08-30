@@ -19,6 +19,7 @@ import (
 	"jobhawk/internal/jobstore"
 	"jobhawk/internal/searchqueries"
 	telegrambot "jobhawk/internal/telegram"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -51,6 +52,7 @@ func main() {
 	greenhouseClient := greenhouse.NewClient(nil)
 	workdayClient := workday.NewClient(nil)
 	ashbyClient := ashby.NewClient(nil)
+	textClient := textsearch.NewClient(nil)
 	bot, err := telegrambot.NewWithProviders(
 		cfg.TelegramBotToken,
 		cfg.TelegramChatID,
@@ -59,6 +61,7 @@ func main() {
 		workdayClient,
 		ashbyClient,
 		logger,
+		textClient,
 	)
 	if err != nil {
 		logger.Error("create bot", "error", err)
@@ -71,6 +74,7 @@ func main() {
 		ashbyClient,
 		greenhouseClient,
 		workdayClient,
+		textClient,
 	)
 	bot.SetDailyRunner(dailyRunner)
 	bot.SetHourlySubscriptions(hourlyStore, cfg.DailyTimezone)
@@ -83,6 +87,7 @@ func main() {
 		greenhouseClient,
 		workdayClient,
 		cfg.DailyTimezone,
+		textClient,
 	)
 	hourlyScheduler := hourly.NewScheduler(hourlyRunner, logger)
 

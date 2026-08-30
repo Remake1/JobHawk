@@ -9,6 +9,7 @@ import (
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -68,6 +69,12 @@ func (s fakeWorkday) Search(context.Context, workday.Filters) ([]jobs.Job, error
 	return s.found, nil
 }
 
+type fakeText struct{ found []jobs.Job }
+
+func (s fakeText) Search(context.Context, textsearch.Filters) ([]jobs.Job, error) {
+	return s.found, nil
+}
+
 func TestRunnerAdvancesSilentEmptySearch(t *testing.T) {
 	location := time.FixedZone("test", -5*60*60)
 	now := time.Date(2026, 8, 25, 10, 7, 0, 0, location)
@@ -116,6 +123,28 @@ func TestRunnerNotifiesWhenSearchHasResults(t *testing.T) {
 		t.Fatalf("RunDue() error = %v", err)
 	}
 	if len(notifier.results) != 1 || len(notifier.results[0]) != 1 || notifier.queries[0].Name != "Acme" {
+		t.Fatalf("notifications = %+v", notifier.results)
+	}
+}
+
+func TestRunnerNotifiesForTextAvailability(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	filters := textsearch.Filters{URL: "https://example.com/jobs", NoJobsText: "No jobs"}
+	subscriptions := &fakeSubscriptionStore{due: []Subscription{{
+		ID: 5, SearchQueryID: 10, SearchDate: now, IntervalMinutes: 30, NextRunAt: now,
+	}}}
+	notifier := &fakeNotifier{}
+	runner := NewRunner(
+		subscriptions,
+		fakeQueryStore{query: searchqueries.Query{ID: 10, Name: "Text", SourceType: searchqueries.SourceText, Text: &filters}},
+		notifier, fakeAshby{}, fakeGreenhouse{}, fakeWorkday{}, time.UTC,
+		fakeText{found: []jobs.Job{{ID: "availability", Title: "Matching jobs available"}}},
+	)
+
+	if err := runner.RunDue(context.Background(), now); err != nil {
+		t.Fatalf("RunDue() error = %v", err)
+	}
+	if len(notifier.results) != 1 || notifier.results[0][0].ID != "availability" {
 		t.Fatalf("notifications = %+v", notifier.results)
 	}
 }

@@ -8,10 +8,12 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
   words
 - Workday CXS searches with tenant/site discovery from a job URL, partial
   location matching, and title-word filters
+- Generic text searches that fetch any filtered job-board URL and detect its
+  configured empty-results message
 - Persistent search queries with common columns and source-specific JSONB filters
 - Inline-keyboard menus for creating, listing, running, and deleting searches
 - Non-blocking search execution with immediate Telegram progress feedback
-- `/ashby`, `/greenhouse`, `/workday`, `/queries`, and one-shot `/search`
+- `/ashby`, `/greenhouse`, `/workday`, `/text`, `/queries`, and one-shot `/search`
   command fallbacks
 - Access restricted to one configured Telegram chat ID
 - PostgreSQL 18 in Compose, pgx v5 pooling, and sqlc-generated query code
@@ -49,14 +51,14 @@ make db-up
 make run
 ```
 
-## Ashby, Greenhouse, and Workday searches
+## Job board searches
 
 Send `/start` or `/menu` to open the button interface:
 
 1. Choose **Add search query**.
-2. Choose Ashby, Greenhouse, or Workday, then enter the provider details and
-   filters in the guided form. For Ashby and Workday, paste any public job URL
-   from the target site.
+2. Choose Ashby, Greenhouse, Workday, or Text search, then enter the provider
+   details and filters in the guided form. Text search accepts a complete job
+   board results URL with its filters already applied.
 3. Review the typed filters and choose **Save search**.
 
 Use **Run daily report now** on the main menu to trigger the full scheduled
@@ -112,6 +114,20 @@ matches `Krakow, Poland`. Every title word must be present. JobHawk derives the
 CXS endpoint from the URL, posts pages of 20 jobs to
 `/wday/cxs/{tenant}/{site}/jobs`, and searches all returned pages.
 
+Use a text search for a board without a supported API. Supply the full filtered
+results URL and the exact text the returned HTML contains when there are no
+matches:
+
+```text
+/text Google Poland internships | https://www.google.com/about/careers/applications/jobs/results?location=Poland&target_level=INTERN_AND_APPRENTICE | Search again or try updating your filters
+```
+
+JobHawk performs an HTTP GET and searches the response HTML for that literal,
+case-sensitive fragment. If the fragment is present, the search is empty. If it
+is absent, JobHawk returns one availability result linked to the filtered page;
+it does not attempt to extract individual posting details. HTTP failures and
+oversized responses are reported as query failures rather than job matches.
+
 Run or inspect saved queries:
 
 ```text
@@ -155,7 +171,7 @@ docker compose exec -T postgres psql -U jobhawk -d jobhawk < db/migrations/003_c
 `search_queries` keeps common fields (`name`, `source_type`, `enabled`, and
 timestamps) as SQL columns. `filters` is JSONB and is decoded into the
 source-specific Go type `ashby.Filters`, `greenhouse.Filters`, or
-`workday.Filters`. Query names
+`workday.Filters`, or `textsearch.Filters`. Query names
 are unique; saving a query with an existing name updates it, including its
 source type.
 

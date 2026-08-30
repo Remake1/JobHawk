@@ -105,6 +105,20 @@ func TestDecodeQuerySelectsAshby(t *testing.T) {
 	}
 }
 
+func TestDecodeQuerySelectsTextSearch(t *testing.T) {
+	query, err := decodeQuery(db.SearchQuery{
+		Name:       "Google internships",
+		SourceType: "text",
+		Filters:    json.RawMessage(`{"url":"https://example.com/jobs?location=Poland","no_jobs_text":"No matching jobs"}`),
+	})
+	if err != nil {
+		t.Fatalf("decodeQuery() error = %v", err)
+	}
+	if query.SourceType != SourceText || query.Text == nil || query.Text.NoJobsText != "No matching jobs" || query.Ashby != nil || query.Greenhouse != nil || query.Workday != nil {
+		t.Fatalf("decodeQuery() = %+v", query)
+	}
+}
+
 func TestApplyEditableFiltersPreservesImmutableFields(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -12,6 +12,7 @@ import (
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/jobstore"
 	"jobhawk/internal/searchqueries"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -58,6 +59,12 @@ func (s fakeGreenhouse) Search(context.Context, greenhouse.Filters) ([]jobs.Job,
 type fakeWorkday struct{ found []jobs.Job }
 
 func (s fakeWorkday) Search(context.Context, workday.Filters) ([]jobs.Job, error) {
+	return s.found, nil
+}
+
+type fakeText struct{ found []jobs.Job }
+
+func (s fakeText) Search(context.Context, textsearch.Filters) ([]jobs.Job, error) {
 	return s.found, nil
 }
 
@@ -120,6 +127,27 @@ func TestRunnerStillSendsDigestWhenAQueryFails(t *testing.T) {
 	}
 	if len(notifier.reports) != 1 || len(notifier.reports[0].Failures) != 1 {
 		t.Fatalf("reports = %+v", notifier.reports)
+	}
+}
+
+func TestRunnerStoresTextAvailabilityResult(t *testing.T) {
+	filters := textsearch.Filters{URL: "https://example.com/jobs?location=Poland", NoJobsText: "No jobs"}
+	store := &fakeJobStore{seen: make(map[string]struct{})}
+	notifier := &fakeNotifier{}
+	runner := NewRunner(
+		fakeQueryStore{queries: []searchqueries.Query{{Name: "Text", SourceType: searchqueries.SourceText, Text: &filters}}},
+		store, notifier, fakeAshby{}, fakeGreenhouse{}, fakeWorkday{},
+		fakeText{found: []jobs.Job{{ID: "availability", Title: "Matching jobs available", URL: filters.URL}}},
+	)
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if len(notifier.reports) != 1 || len(notifier.reports[0].NewJobs) != 1 {
+		t.Fatalf("reports = %+v", notifier.reports)
+	}
+	if _, ok := store.seen["text|"+filters.URL+"|availability"]; !ok {
+		t.Fatalf("stored keys = %+v", store.seen)
 	}
 }
 

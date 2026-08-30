@@ -15,6 +15,7 @@ import (
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/jobstore"
 	"jobhawk/internal/searchqueries"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -53,6 +54,10 @@ type workdaySearcher interface {
 	Search(context.Context, workday.Filters) ([]jobs.Job, error)
 }
 
+type textSearcher interface {
+	Search(context.Context, textsearch.Filters) ([]jobs.Job, error)
+}
+
 // Runner executes every saved search, records every returned job, and emits a
 // single aggregate digest. A query is automatically part of the daily run as
 // soon as it is saved.
@@ -63,6 +68,7 @@ type Runner struct {
 	notifier   notifier
 	ashby      ashbySearcher
 	greenhouse greenhouseSearcher
+	text       textSearcher
 	workday    workdaySearcher
 }
 
@@ -73,10 +79,15 @@ func NewRunner(
 	ashby ashbySearcher,
 	greenhouse greenhouseSearcher,
 	workday workdaySearcher,
+	textSearchers ...textSearcher,
 ) *Runner {
+	text := textSearcher(textsearch.NewClient(nil))
+	if len(textSearchers) > 0 && textSearchers[0] != nil {
+		text = textSearchers[0]
+	}
 	return &Runner{
 		queries: queries, jobs: jobs, notifier: notifier,
-		ashby: ashby, greenhouse: greenhouse, workday: workday,
+		ashby: ashby, greenhouse: greenhouse, text: text, workday: workday,
 	}
 }
 
@@ -151,6 +162,12 @@ func (r *Runner) search(ctx context.Context, query searchqueries.Query) ([]jobs.
 		}
 		found, err := r.workday.Search(ctx, *query.Workday)
 		return found, workdaySourceKey(*query.Workday), err
+	case searchqueries.SourceText:
+		if query.Text == nil {
+			return nil, "", errors.New("text search filters are missing")
+		}
+		found, err := r.text.Search(ctx, *query.Text)
+		return found, strings.TrimSpace(query.Text.URL), err
 	default:
 		return nil, "", fmt.Errorf("unsupported source %q", query.SourceType)
 	}
