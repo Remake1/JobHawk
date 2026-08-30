@@ -28,7 +28,7 @@ still lets you run it once without affecting the daily schedule.
 
 ## Run locally
 
-Requirements: Docker Compose, or Go 1.25 plus PostgreSQL 18. Direct local
+Requirements: Docker Compose, or Go 1.26.7 plus PostgreSQL 18. Direct local
 runs also need Chrome or Chromium when CSR text searches are enabled. Create a
 Telegram bot token with [@BotFather](https://t.me/BotFather), message the bot
 once, and obtain your numeric chat ID from Telegram's `getUpdates` API.
