@@ -12,6 +12,7 @@ import (
 	"jobhawk/internal/hourly"
 	"jobhawk/internal/jobs"
 	"jobhawk/internal/searchqueries"
+	"jobhawk/internal/textsearch"
 )
 
 const (
@@ -22,6 +23,8 @@ const (
 	callbackAdd        = "m:add"
 	callbackRunDaily   = "m:daily"
 	callbackCancel     = "w:cancel"
+	callbackCSR        = "w:csr"
+	callbackSSR        = "w:ssr"
 	callbackSkipLoc    = "w:skiploc"
 	callbackSkipTitle  = "w:skiptitle"
 	callbackSave       = "w:save"
@@ -310,7 +313,7 @@ func creationPromptScreen(session creationSession, validationError string) scree
 	case creationBoard:
 		switch session.draft.SourceType {
 		case searchqueries.SourceText:
-			title = "Step 2 of 3 — Filtered job board URL"
+			title = "Step 2 of 4 — Filtered job board URL"
 			instruction = "Paste the full job board results URL, including all filters.\n\nExample: https://www.google.com/about/careers/applications/jobs/results?location=Poland&target_level=INTERN_AND_APPRENTICE"
 		case searchqueries.SourceWorkday:
 			title = "Step 2 of 4 — Workday job URL"
@@ -324,7 +327,7 @@ func creationPromptScreen(session creationSession, validationError string) scree
 		}
 	case creationLocation:
 		if session.draft.SourceType == searchqueries.SourceText {
-			title = "Step 3 of 3 — Empty-results text"
+			title = "Step 3 of 4 — Empty-results text"
 			instruction = "Enter the exact text shown on the page when no jobs match. If this text is absent, JobHawk reports that matching jobs are available.\n\nExample: Search again or try updating your filters"
 			break
 		}
@@ -344,6 +347,13 @@ func creationPromptScreen(session creationSession, validationError string) scree
 		if draftLocation(session.draft) != "" {
 			rows = append(rows, tu.InlineKeyboardRow(callbackButton("Skip title words", callbackSkipTitle)))
 		}
+	case creationRender:
+		title = "Step 4 of 4 — Page rendering"
+		instruction = "Does this website render its job results in JavaScript on the client side? Most sites do not; choose server-side unless the initial HTML is empty and JavaScript fills in the page."
+		rows = append(rows,
+			tu.InlineKeyboardRow(callbackButton("Server-side (default)", callbackSSR)),
+			tu.InlineKeyboardRow(callbackButton("Client-side (JavaScript)", callbackCSR)),
+		)
 	}
 	rows = append(rows, tu.InlineKeyboardRow(callbackButton("Cancel", callbackCancel)))
 
@@ -442,9 +452,18 @@ func querySummaryParts(query searchqueries.Query) []tu.MessageEntityCollection {
 			tu.Entity(truncateDisplayText(query.Text.URL, 1_500)).Code(),
 			tu.Entity("\n\nText meaning no jobs\n"),
 			tu.Entity(truncateDisplayText(query.Text.NoJobsText, 1_500)).Code(),
+			tu.Entity("\n\nRendering\n"),
+			tu.Entity(textRenderingLabel(*query.Text)).Code(),
 		)
 	}
 	return parts
+}
+
+func textRenderingLabel(filters textsearch.Filters) string {
+	if filters.ClientSideRender {
+		return "client-side (Chromium)"
+	}
+	return "server-side (default)"
 }
 
 func sourceLabel(source searchqueries.SourceType) string {
@@ -496,7 +515,7 @@ func creationNameExample(source searchqueries.SourceType) string {
 
 func creationStepCount(source searchqueries.SourceType) string {
 	if source == searchqueries.SourceText {
-		return "3"
+		return "4"
 	}
 	return "4"
 }

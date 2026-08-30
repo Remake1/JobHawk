@@ -9,7 +9,8 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
 - Workday CXS searches with tenant/site discovery from a job URL, partial
   location matching, and title-word filters
 - Generic text searches that fetch any filtered job-board URL and detect its
-  configured empty-results message
+  configured empty-results message, with optional Chromium rendering for
+  client-side JavaScript applications
 - Persistent search queries with common columns and source-specific JSONB filters
 - Inline-keyboard menus for creating, listing, running, and deleting searches
 - Non-blocking search execution with immediate Telegram progress feedback
@@ -27,7 +28,10 @@ still lets you run it once without affecting the daily schedule.
 
 ## Run locally
 
-Requirements: Docker Compose, or Go 1.25 plus PostgreSQL 18. Create a Telegram bot token with [@BotFather](https://t.me/BotFather), message the bot once, and obtain your numeric chat ID from Telegram's `getUpdates` API.
+Requirements: Docker Compose, or Go 1.25 plus PostgreSQL 18. Direct local
+runs also need Chrome or Chromium when CSR text searches are enabled. Create a
+Telegram bot token with [@BotFather](https://t.me/BotFather), message the bot
+once, and obtain your numeric chat ID from Telegram's `getUpdates` API.
 
 ```sh
 cp .env.example .env
@@ -119,14 +123,18 @@ results URL and the exact text the returned HTML contains when there are no
 matches:
 
 ```text
-/text Google Poland internships | https://www.google.com/about/careers/applications/jobs/results?location=Poland&target_level=INTERN_AND_APPRENTICE | Search again or try updating your filters
+/text Google Poland internships | https://www.google.com/about/careers/applications/jobs/results?location=Poland&target_level=INTERN_AND_APPRENTICE | Search again or try updating your filters | csr
 ```
 
-JobHawk performs an HTTP GET and searches the response HTML for that literal,
-case-sensitive fragment. If the fragment is present, the search is empty. If it
-is absent, JobHawk returns one availability result linked to the filtered page;
-it does not attempt to extract individual posting details. HTTP failures and
-oversized responses are reported as query failures rather than job matches.
+Server-side HTTP fetching is the default. During guided creation, choose
+client-side rendering only when the initial HTML is empty and JavaScript fills
+in the page; the compact command accepts an optional final `csr` or `ssr` field.
+For CSR searches, JobHawk keeps one headless Chromium process alive and opens a
+fresh tab for each search, then searches the rendered DOM. In either mode the
+configured literal is matched case-sensitively. If it is present, the search is
+empty. If it is absent, JobHawk returns one availability result linked to the
+filtered page; it does not attempt to extract individual posting details. HTTP,
+rendering, and oversized-response failures are reported as query failures.
 When saving a URL, JobHawk also canonicalizes query-string literals and repairs
 one accidental extra percent-encoding layer, such as `%2520` instead of `%20`.
 

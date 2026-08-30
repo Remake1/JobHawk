@@ -6,6 +6,9 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /jobhawk ./cmd/bot
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates chromium
 COPY --from=build /jobhawk /jobhawk
+ENV HOME=/tmp
+USER 65532:65532
 ENTRYPOINT ["/jobhawk"]

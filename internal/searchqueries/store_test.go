@@ -114,7 +114,21 @@ func TestDecodeQuerySelectsTextSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeQuery() error = %v", err)
 	}
-	if query.SourceType != SourceText || query.Text == nil || query.Text.NoJobsText != "No matching jobs" || query.Ashby != nil || query.Greenhouse != nil || query.Workday != nil {
+	if query.SourceType != SourceText || query.Text == nil || query.Text.NoJobsText != "No matching jobs" || query.Text.ClientSideRender || query.Ashby != nil || query.Greenhouse != nil || query.Workday != nil {
+		t.Fatalf("decodeQuery() = %+v", query)
+	}
+}
+
+func TestDecodeQueryPreservesTextSearchCSRMode(t *testing.T) {
+	query, err := decodeQuery(db.SearchQuery{
+		Name:       "Dynamic jobs",
+		SourceType: "text",
+		Filters:    json.RawMessage(`{"url":"https://example.com/jobs","no_jobs_text":"No matching jobs","client_side_render":true}`),
+	})
+	if err != nil {
+		t.Fatalf("decodeQuery() error = %v", err)
+	}
+	if query.Text == nil || !query.Text.ClientSideRender {
 		t.Fatalf("decodeQuery() = %+v", query)
 	}
 }

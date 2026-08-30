@@ -9,18 +9,27 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/chromedp/chromedp"
 
 	"jobhawk/internal/jobs"
 )
 
-const maxResponseSize = 10 << 20
+const (
+	maxResponseSize = 10 << 20
+	renderTimeout   = 30 * time.Second
+	renderSettle    = 2 * time.Second
+)
 
 // Filters is the JSONB payload stored for a text search query. When
-// NoJobsText occurs verbatim in the fetched HTML, the query has no results.
+// NoJobsText occurs verbatim in the fetched HTML or rendered DOM, the query has
+// no results. ClientSideRender is false by default for backward compatibility.
 type Filters struct {
-	URL        string `json:"url"`
-	NoJobsText string `json:"no_jobs_text"`
+	URL              string `json:"url"`
+	NoJobsText       string `json:"no_jobs_text"`
+	ClientSideRender bool   `json:"client_side_render,omitempty"`
 }
 
 func (f Filters) Normalize() (Filters, error) {
@@ -125,13 +134,22 @@ func isHex(value byte) bool {
 
 type Client struct {
 	httpClient *http.Client
+	renderer   pageRenderer
 }
 
 func NewClient(httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &Client{httpClient: httpClient}
+	return &Client{httpClient: httpClient, renderer: newChromeRenderer()}
+}
+
+// Close releases the shared Chrome process if client-side rendering was used.
+// It is safe to call Close when no rendered search has run.
+func (c *Client) Close() {
+	if c != nil && c.renderer != nil {
+		c.renderer.Close()
+	}
 }
 
 // Search fetches the configured page and searches its HTML for the exact
@@ -144,31 +162,22 @@ func (c *Client) Search(ctx context.Context, filters Filters) ([]jobs.Job, error
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, filters.URL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create text search request: %w", err)
-	}
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	req.Header.Set("User-Agent", "JobHawk/1.0")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch job board page: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4_096))
-		return nil, fmt.Errorf("job board returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
-	if err != nil {
-		return nil, fmt.Errorf("read job board page: %w", err)
+	var body string
+	if filters.ClientSideRender {
+		body, err = c.renderer.Render(ctx, filters.URL)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		body, err = c.fetchHTML(ctx, filters.URL)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(body) > maxResponseSize {
 		return nil, fmt.Errorf("job board page exceeds %d bytes", maxResponseSize)
 	}
-	if strings.Contains(string(body), filters.NoJobsText) {
+	if strings.Contains(body, filters.NoJobsText) {
 		return nil, nil
 	}
 
@@ -179,4 +188,131 @@ func (c *Client) Search(ctx context.Context, filters Filters) ([]jobs.Job, error
 		Company: parsed.Hostname(),
 		URL:     filters.URL,
 	}}, nil
+}
+
+func (c *Client) fetchHTML(ctx context.Context, requestURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create text search request: %w", err)
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("User-Agent", "JobHawk/1.0")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch job board page: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4_096))
+		return "", fmt.Errorf("job board returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
+	if err != nil {
+		return "", fmt.Errorf("read job board page: %w", err)
+	}
+	if len(body) > maxResponseSize {
+		return "", fmt.Errorf("job board page exceeds %d bytes", maxResponseSize)
+	}
+	return string(body), nil
+}
+
+type pageRenderer interface {
+	Render(context.Context, string) (string, error)
+	Close()
+}
+
+// chromeRenderer owns one lazily started Chrome process. browserCtx represents
+// its long-lived first tab; every Render call creates a child context, which
+// chromedp maps to a new tab in that same browser.
+type chromeRenderer struct {
+	mu              sync.Mutex
+	browserCtx      context.Context
+	browserCancel   context.CancelFunc
+	allocatorCancel context.CancelFunc
+	closed          bool
+}
+
+func newChromeRenderer() *chromeRenderer {
+	return &chromeRenderer{}
+}
+
+func (r *chromeRenderer) Render(ctx context.Context, requestURL string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("render job board page: %w", err)
+	}
+	browserCtx, err := r.context()
+	if err != nil {
+		return "", err
+	}
+
+	tabCtx, cancelTab := chromedp.NewContext(browserCtx)
+	stopCallerCancellation := context.AfterFunc(ctx, cancelTab)
+	tabCtx, cancelTimeout := context.WithTimeout(tabCtx, renderTimeout)
+	defer func() {
+		stopCallerCancellation()
+		cancelTimeout()
+		cancelTab()
+	}()
+
+	var html string
+	if err := chromedp.Run(tabCtx,
+		chromedp.Navigate(requestURL),
+		chromedp.WaitReady("html", chromedp.ByQuery),
+		// Navigate waits for the load event. Give asynchronous framework/API
+		// work a short settling window before capturing the live DOM.
+		chromedp.Sleep(renderSettle),
+		chromedp.OuterHTML("html", &html, chromedp.ByQuery),
+	); err != nil {
+		return "", fmt.Errorf("render job board page: %w", err)
+	}
+	return html, nil
+}
+
+func (r *chromeRenderer) context() (context.Context, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return nil, errors.New("client-side renderer is closed")
+	}
+	if r.browserCtx != nil {
+		return r.browserCtx, nil
+	}
+
+	options := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	options = append(options, chromedp.Flag("no-sandbox", true))
+	allocatorCtx, allocatorCancel := chromedp.NewExecAllocator(context.Background(), options...)
+	browserCtx, browserCancel := chromedp.NewContext(allocatorCtx)
+	if err := chromedp.Run(browserCtx); err != nil {
+		browserCancel()
+		allocatorCancel()
+		return nil, fmt.Errorf("start Chrome for client-side rendering: %w", err)
+	}
+	r.browserCtx = browserCtx
+	r.browserCancel = browserCancel
+	r.allocatorCancel = allocatorCancel
+	return browserCtx, nil
+}
+
+func (r *chromeRenderer) Close() {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.closed = true
+	browserCancel := r.browserCancel
+	allocatorCancel := r.allocatorCancel
+	r.browserCtx = nil
+	r.browserCancel = nil
+	r.allocatorCancel = nil
+	r.mu.Unlock()
+
+	if browserCancel != nil {
+		browserCancel()
+	}
+	if allocatorCancel != nil {
+		allocatorCancel()
+	}
 }

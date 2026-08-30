@@ -4,8 +4,23 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+type fakeRenderer struct {
+	html   string
+	err    error
+	urls   []string
+	closed bool
+}
+
+func (r *fakeRenderer) Render(_ context.Context, requestURL string) (string, error) {
+	r.urls = append(r.urls, requestURL)
+	return r.html, r.err
+}
+
+func (r *fakeRenderer) Close() { r.closed = true }
 
 func TestSearchReturnsNoJobsWhenEmptyTextIsPresent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -46,6 +61,42 @@ func TestSearchReturnsAvailabilityWhenEmptyTextIsAbsent(t *testing.T) {
 	}
 }
 
+func TestSearchUsesRenderedDOMForClientSidePage(t *testing.T) {
+	renderer := &fakeRenderer{html: `<html><body><div>No matching jobs</div></body></html>`}
+	client := NewClient(nil)
+	client.renderer = renderer
+
+	found, err := client.Search(context.Background(), Filters{
+		URL: "https://example.com/jobs", NoJobsText: "No matching jobs", ClientSideRender: true,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(found) != 0 {
+		t.Fatalf("Search() returned %d jobs, want 0", len(found))
+	}
+	if len(renderer.urls) != 1 || renderer.urls[0] != "https://example.com/jobs" {
+		t.Fatalf("renderer URLs = %v", renderer.urls)
+	}
+
+	client.Close()
+	if !renderer.closed {
+		t.Fatal("Close() did not close the renderer")
+	}
+}
+
+func TestSearchRejectsOversizedRenderedPage(t *testing.T) {
+	client := NewClient(nil)
+	client.renderer = &fakeRenderer{html: strings.Repeat("x", maxResponseSize+1)}
+
+	_, err := client.Search(context.Background(), Filters{
+		URL: "https://example.com/jobs", NoJobsText: "No jobs", ClientSideRender: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Search() error = %v, want size error", err)
+	}
+}
+
 func TestSearchRejectsErrorResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -69,6 +120,16 @@ func TestFiltersRequireURLAndNoJobsText(t *testing.T) {
 		if _, err := filters.Normalize(); err == nil {
 			t.Errorf("Normalize(%+v) expected an error", filters)
 		}
+	}
+}
+
+func TestFiltersDefaultToServerSideRendering(t *testing.T) {
+	filters, err := (Filters{URL: "https://example.com/jobs", NoJobsText: "No jobs"}).Normalize()
+	if err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	if filters.ClientSideRender {
+		t.Fatal("ClientSideRender defaults to true")
 	}
 }
 

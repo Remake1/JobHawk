@@ -53,6 +53,7 @@ func main() {
 	workdayClient := workday.NewClient(nil)
 	ashbyClient := ashby.NewClient(nil)
 	textClient := textsearch.NewClient(nil)
+	defer textClient.Close()
 	bot, err := telegrambot.NewWithProviders(
 		cfg.TelegramBotToken,
 		cfg.TelegramChatID,

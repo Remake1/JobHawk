@@ -466,21 +466,42 @@ func workdayUsage() string {
 func parseTextArgs(args string) (string, textsearch.Filters, error) {
 	parts := strings.SplitN(args, "|", 3)
 	if len(parts) != 3 {
-		return "", textsearch.Filters{}, errors.New("expected three fields separated by |")
+		return "", textsearch.Filters{}, errors.New("expected at least three fields separated by |")
 	}
 	name := strings.TrimSpace(parts[0])
 	if name == "" {
 		return "", textsearch.Filters{}, errors.New("query name is required")
 	}
-	filters, err := (textsearch.Filters{URL: parts[1], NoJobsText: parts[2]}).Normalize()
+	clientSideRender := false
+	noJobsText := parts[2]
+	if separator := strings.LastIndex(noJobsText, "|"); separator >= 0 {
+		if mode, ok := parseTextRenderingMode(noJobsText[separator+1:]); ok {
+			clientSideRender = mode
+			noJobsText = noJobsText[:separator]
+		}
+	}
+	filters, err := (textsearch.Filters{
+		URL: parts[1], NoJobsText: noJobsText, ClientSideRender: clientSideRender,
+	}).Normalize()
 	if err != nil {
 		return "", textsearch.Filters{}, err
 	}
 	return name, filters, nil
 }
 
+func parseTextRenderingMode(value string) (clientSide bool, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "csr", "client", "client-side", "true", "yes":
+		return true, true
+	case "ssr", "server", "server-side", "false", "no":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
 func textUsage() string {
-	return "Usage:\n/text <name> | <filtered job board URL> | <text shown when no jobs are found>\n\nExample:\n/text Google internships | https://www.google.com/about/careers/applications/jobs/results?location=Poland | Search again or try updating your filters"
+	return "Usage:\n/text <name> | <filtered job board URL> | <text shown when no jobs are found> | <optional csr or ssr>\n\nExample:\n/text Google internships | https://www.google.com/about/careers/applications/jobs/results?location=Poland | Search again or try updating your filters | csr"
 }
 
 func (b *Bot) runQuery(ctx context.Context, query searchqueries.Query) ([]jobs.Job, error) {

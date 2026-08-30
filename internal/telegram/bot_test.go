@@ -139,6 +139,26 @@ func TestParseTextArgsPreservesFilteredURLAndFragment(t *testing.T) {
 	}
 }
 
+func TestParseTextArgsAcceptsOptionalCSRMode(t *testing.T) {
+	name, filters, err := parseTextArgs("Dynamic board | https://example.com/jobs | No matching jobs | csr")
+	if err != nil {
+		t.Fatalf("parseTextArgs() error = %v", err)
+	}
+	if name != "Dynamic board" || !filters.ClientSideRender {
+		t.Fatalf("parseTextArgs() = %q, %+v", name, filters)
+	}
+}
+
+func TestParseTextArgsPreservesPipesInEmptyText(t *testing.T) {
+	_, filters, err := parseTextArgs("Board | https://example.com/jobs | No jobs | change filters")
+	if err != nil {
+		t.Fatalf("parseTextArgs() error = %v", err)
+	}
+	if filters.NoJobsText != "No jobs | change filters" || filters.ClientSideRender {
+		t.Fatalf("parseTextArgs() filters = %+v", filters)
+	}
+}
+
 func TestMainMenuScreenHasButtons(t *testing.T) {
 	menu := mainMenuScreen()
 	if len(menu.entities) == 0 || menu.keyboard == nil || len(menu.keyboard.InlineKeyboard) != 3 {
@@ -398,6 +418,22 @@ func TestCreationPromptOffersOnlyValidSkips(t *testing.T) {
 	}, "")
 	if titleWithLocation.keyboard.InlineKeyboard[0][0].CallbackData != callbackSkipTitle {
 		t.Fatal("title step did not allow skip when location is set")
+	}
+}
+
+func TestTextCreationPromptAsksForRenderingModeWithServerDefault(t *testing.T) {
+	prompt := creationPromptScreen(creationSession{
+		step:  creationRender,
+		draft: creationDraft{SourceType: searchqueries.SourceText},
+	}, "")
+	if !strings.Contains(prompt.text, "render its job results in JavaScript") {
+		t.Fatalf("prompt text = %q", prompt.text)
+	}
+	if got := prompt.keyboard.InlineKeyboard[0][0].CallbackData; got != callbackSSR {
+		t.Fatalf("default rendering callback = %q", got)
+	}
+	if got := prompt.keyboard.InlineKeyboard[1][0].CallbackData; got != callbackCSR {
+		t.Fatalf("CSR rendering callback = %q", got)
 	}
 }
 

@@ -24,6 +24,7 @@ const (
 	creationBoard
 	creationLocation
 	creationTitleWords
+	creationRender
 	creationReview
 )
 
@@ -167,7 +168,7 @@ func (b *Bot) handleCreationInput(ctx context.Context, chatID int64, input strin
 			}
 			next, err = b.updateCreationSession(creationLocation, func(current *creationSession) error {
 				current.draft.Text = normalized
-				current.step = creationReview
+				current.step = creationRender
 				return nil
 			})
 			break
@@ -208,6 +209,11 @@ func (b *Bot) handleCreationInput(ctx context.Context, chatID int64, input strin
 			current.step = creationReview
 			return nil
 		})
+	case creationRender:
+		// Rendering is selected with explicit buttons so server-side remains a
+		// visible default and a free-form answer cannot be misinterpreted.
+		b.sendScreen(ctx, chatID, creationPromptScreen(session, "Choose a rendering option below."))
+		return
 	case creationReview:
 		b.sendScreen(ctx, chatID, creationReviewScreen(session))
 		return
@@ -323,6 +329,21 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 			if validationErr := normalizeDraftFilters(&current.draft, nil); validationErr != nil {
 				return validationErr
 			}
+			current.step = creationReview
+			return nil
+		})
+		if err != nil {
+			b.answerCallback(ctx, query.ID, err.Error(), true)
+			return
+		}
+		next = creationReviewScreen(session)
+	case callbackSSR, callbackCSR:
+		clientSideRender := callbackData == callbackCSR
+		session, err := b.updateCreationSession(creationRender, func(current *creationSession) error {
+			if current.draft.SourceType != searchqueries.SourceText {
+				return errors.New("rendering mode only applies to text searches")
+			}
+			current.draft.Text.ClientSideRender = clientSideRender
 			current.step = creationReview
 			return nil
 		})
