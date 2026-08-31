@@ -462,6 +462,32 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *telego.CallbackQue
 		case "edit_tags":
 			session := b.beginEditSession(queryRecord, editTags)
 			next = editPromptScreen(session, "")
+		case "edit_rendering":
+			if queryRecord.SourceType != searchqueries.SourceText || queryRecord.Text == nil {
+				b.answerCallback(ctx, query.ID, "Rendering mode only applies to text searches.", true)
+				return
+			}
+			next = textRenderingScreen(queryRecord)
+		case "render_ssr", "render_csr":
+			if queryRecord.SourceType != searchqueries.SourceText || queryRecord.Text == nil {
+				b.answerCallback(ctx, query.ID, "Rendering mode only applies to text searches.", true)
+				return
+			}
+			clientSideRender := action == "render_csr"
+			updated, updateErr := b.queryStore.Update(ctx, queryRecord.ID, searchqueries.EditableFilters{
+				ClientSideRender: &clientSideRender,
+			})
+			if updateErr != nil {
+				b.callbackFailure(ctx, query, "Could not change the rendering mode.", updateErr)
+				return
+			}
+			subscription, subscriptionErr := b.subscriptionForQuery(ctx, updated.ID)
+			if subscriptionErr != nil {
+				b.callbackFailure(ctx, query, "Rendering changed, but the hourly alert could not be loaded.", subscriptionErr)
+				return
+			}
+			next = queryDetailScreen(updated, subscription)
+			toast = "Rendering mode updated"
 		case "clear_location", "clear_tags":
 			editable, editableErr := editableFilters(queryRecord)
 			if editableErr != nil {

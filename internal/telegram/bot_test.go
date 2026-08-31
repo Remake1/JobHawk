@@ -182,16 +182,40 @@ func TestCreationSourceButtonsIncludeProviderEmojis(t *testing.T) {
 	}
 }
 
-func TestTextQueryDetailHasNoUnsupportedEditAction(t *testing.T) {
+func TestTextQueryDetailOffersRenderingAction(t *testing.T) {
 	filters := textsearch.Filters{URL: "https://example.com/jobs?location=Poland", NoJobsText: "No matching jobs"}
 	detail := queryDetailScreen(searchqueries.Query{
 		ID: 44, Name: "Google Poland", SourceType: searchqueries.SourceText, Text: &filters,
 	}, nil)
-	if len(detail.keyboard.InlineKeyboard[0]) != 1 || detail.keyboard.InlineKeyboard[0][0].CallbackData != "q:run:44" {
+	if len(detail.keyboard.InlineKeyboard[0]) != 2 || detail.keyboard.InlineKeyboard[0][0].CallbackData != "q:run:44" || detail.keyboard.InlineKeyboard[0][1].CallbackData != "q:edit_rendering:44" {
 		t.Fatalf("text query actions = %+v", detail.keyboard.InlineKeyboard[0])
 	}
 	if !strings.Contains(detail.text, filters.URL) || !strings.Contains(detail.text, filters.NoJobsText) {
 		t.Fatalf("text query detail = %q", detail.text)
+	}
+}
+
+func TestTextRenderingScreenAllowsSwitchingBothWays(t *testing.T) {
+	for _, clientSideRender := range []bool{false, true} {
+		filters := textsearch.Filters{
+			URL: "https://example.com/jobs", NoJobsText: "No matching jobs", ClientSideRender: clientSideRender,
+		}
+		rendering := textRenderingScreen(searchqueries.Query{
+			ID: 44, Name: "Dynamic board", SourceType: searchqueries.SourceText, Text: &filters,
+		})
+		if got := rendering.keyboard.InlineKeyboard[0][0].CallbackData; got != "q:render_ssr:44" {
+			t.Fatalf("SSR callback = %q", got)
+		}
+		if got := rendering.keyboard.InlineKeyboard[1][0].CallbackData; got != "q:render_csr:44" {
+			t.Fatalf("CSR callback = %q", got)
+		}
+		selectedRow := 0
+		if clientSideRender {
+			selectedRow = 1
+		}
+		if !strings.HasPrefix(rendering.keyboard.InlineKeyboard[selectedRow][0].Text, "✓ ") {
+			t.Fatalf("selected rendering button = %q", rendering.keyboard.InlineKeyboard[selectedRow][0].Text)
+		}
 	}
 }
 
@@ -362,6 +386,9 @@ func TestParseQueryCallback(t *testing.T) {
 	}
 	if action, id, ok := parseQueryCallback("q:edit_tags:73"); !ok || action != "edit_tags" || id != 73 {
 		t.Fatalf("parseQueryCallback(edit tags) = (%q, %d, %v)", action, id, ok)
+	}
+	if action, id, ok := parseQueryCallback("q:render_csr:73"); !ok || action != "render_csr" || id != 73 {
+		t.Fatalf("parseQueryCallback(render CSR) = (%q, %d, %v)", action, id, ok)
 	}
 }
 

@@ -165,7 +165,9 @@ func queryDetailScreen(query searchqueries.Query, subscription *hourly.Subscript
 		hourlyButton = callbackButton("⏱ Delete hourly alert", queryCallback("hourly_delete", query.ID))
 	}
 	actions := tu.InlineKeyboardRow(callbackButton("▶ Run query", queryCallback("run", query.ID)))
-	if query.SourceType != searchqueries.SourceText {
+	if query.SourceType == searchqueries.SourceText {
+		actions = append(actions, callbackButton("⚙ Rendering", queryCallback("edit_rendering", query.ID)))
+	} else {
 		actions = append(actions, callbackButton("✏️ Edit query", queryCallback("edit", query.ID)))
 	}
 	keyboard := tu.InlineKeyboard(
@@ -182,6 +184,33 @@ func queryDetailScreen(query searchqueries.Query, subscription *hourly.Subscript
 		)
 	}
 	return formattedScreen(keyboard, parts...)
+}
+
+func textRenderingScreen(query searchqueries.Query) screen {
+	if query.Text == nil {
+		return queryDetailScreen(query, nil)
+	}
+	serverLabel := "Server-side"
+	clientLabel := "Client-side (JavaScript)"
+	if query.Text.ClientSideRender {
+		clientLabel = "✓ " + clientLabel
+	} else {
+		serverLabel = "✓ " + serverLabel
+	}
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(callbackButton(serverLabel, queryCallback("render_ssr", query.ID))),
+		tu.InlineKeyboardRow(callbackButton(clientLabel, queryCallback("render_csr", query.ID))),
+		tu.InlineKeyboardRow(callbackButton("← Query details", queryCallback("view", query.ID))),
+	)
+	return formattedScreen(
+		keyboard,
+		tu.Entity("Change page rendering").Bold(),
+		tu.Entity("\n\n"),
+		tu.Entity(query.Name).Code(),
+		tu.Entity("\n\nCurrent mode\n"),
+		tu.Entity(textRenderingLabel(*query.Text)).Code(),
+		tu.Entity("\n\nUse client-side rendering only when JavaScript fills in job results after the initial page loads."),
+	)
 }
 
 func hourlyDatePromptScreen(query searchqueries.Query, validationError string) screen {
@@ -544,7 +573,7 @@ func parseQueryCallback(data string) (action string, id int64, ok bool) {
 		return "", 0, false
 	}
 	switch parts[1] {
-	case "view", "run", "edit", "edit_location", "edit_tags", "clear_location", "clear_tags", "hourly_create", "hourly_15", "hourly_30", "hourly_60", "hourly_delete", "delete", "confirm_delete":
+	case "view", "run", "edit", "edit_location", "edit_tags", "clear_location", "clear_tags", "edit_rendering", "render_ssr", "render_csr", "hourly_create", "hourly_15", "hourly_30", "hourly_60", "hourly_delete", "delete", "confirm_delete":
 		return parts[1], id, true
 	default:
 		return "", 0, false

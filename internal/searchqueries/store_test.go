@@ -10,6 +10,7 @@ import (
 	"jobhawk/internal/ashby"
 	"jobhawk/internal/database/db"
 	"jobhawk/internal/greenhouse"
+	"jobhawk/internal/textsearch"
 	"jobhawk/internal/workday"
 )
 
@@ -208,5 +209,39 @@ func TestApplyEditableFiltersRejectsUnfilteredQuery(t *testing.T) {
 	}, EditableFilters{})
 	if err == nil {
 		t.Fatal("applyEditableFilters() accepted an empty location and tags")
+	}
+}
+
+func TestApplyEditableFiltersChangesOnlyTextRenderingMode(t *testing.T) {
+	for _, clientSideRender := range []bool{true, false} {
+		filters := textsearch.Filters{
+			URL:              "https://example.com/jobs?location=Poland",
+			NoJobsText:       "No matching jobs",
+			ClientSideRender: !clientSideRender,
+		}
+		got, err := applyEditableFilters(Query{
+			ID: 4, Name: "Dynamic board", SourceType: SourceText, Text: &filters,
+		}, EditableFilters{ClientSideRender: &clientSideRender})
+		if err != nil {
+			t.Fatalf("applyEditableFilters(%t) error = %v", clientSideRender, err)
+		}
+		if got.Text == nil || got.Text.ClientSideRender != clientSideRender {
+			t.Fatalf("rendering mode = %+v, want client-side %t", got.Text, clientSideRender)
+		}
+		if got.Text.URL != filters.URL || got.Text.NoJobsText != filters.NoJobsText {
+			t.Fatalf("immutable text filters changed: %+v", got.Text)
+		}
+	}
+}
+
+func TestApplyEditableFiltersRejectsRenderingModeForProvider(t *testing.T) {
+	clientSideRender := true
+	_, err := applyEditableFilters(Query{
+		Name:       "Point72",
+		SourceType: SourceGreenhouse,
+		Greenhouse: &greenhouse.Filters{BoardToken: "point72", Location: "Warsaw"},
+	}, EditableFilters{Location: "Warsaw", ClientSideRender: &clientSideRender})
+	if err == nil {
+		t.Fatal("applyEditableFilters() accepted rendering mode for a provider query")
 	}
 }

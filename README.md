@@ -129,6 +129,8 @@ matches:
 Server-side HTTP fetching is the default. During guided creation, choose
 client-side rendering only when the initial HTML is empty and JavaScript fills
 in the page; the compact command accepts an optional final `csr` or `ssr` field.
+For a saved text search, open its query details and use **Rendering** to switch
+between server-side and client-side rendering without recreating the query.
 For CSR searches, JobHawk keeps one headless Chromium process alive and opens a
 fresh tab for each search, then searches the rendered DOM. In either mode the
 configured literal is matched case-sensitively. If it is present, the search is

@@ -40,9 +40,12 @@ type Query struct {
 // EditableFilters is the complete set of fields that may be changed after a
 // query is created. Provider coordinates, the query name, and source type are
 // deliberately absent so callers cannot overwrite them through the edit API.
+// ClientSideRender is a pointer because rendering mode only applies to text
+// searches; nil distinguishes provider filter edits from a rendering update.
 type EditableFilters struct {
-	Location string
-	Tags     []string
+	Location         string
+	Tags             []string
+	ClientSideRender *bool
 }
 
 type AshbyQuery struct {
@@ -262,6 +265,9 @@ func (s *Store) Update(ctx context.Context, id int64, editable EditableFilters) 
 func applyEditableFilters(query Query, editable EditableFilters) (Query, error) {
 	switch query.SourceType {
 	case SourceAshby:
+		if editable.ClientSideRender != nil {
+			return Query{}, errors.New("rendering mode can only be changed for text searches")
+		}
 		if query.Ashby == nil {
 			return Query{}, errors.New("Ashby query filters are missing")
 		}
@@ -274,6 +280,9 @@ func applyEditableFilters(query Query, editable EditableFilters) (Query, error) 
 		}
 		query.Ashby = &normalized
 	case SourceGreenhouse:
+		if editable.ClientSideRender != nil {
+			return Query{}, errors.New("rendering mode can only be changed for text searches")
+		}
 		if query.Greenhouse == nil {
 			return Query{}, errors.New("Greenhouse query filters are missing")
 		}
@@ -286,6 +295,9 @@ func applyEditableFilters(query Query, editable EditableFilters) (Query, error) 
 		}
 		query.Greenhouse = &normalized
 	case SourceWorkday:
+		if editable.ClientSideRender != nil {
+			return Query{}, errors.New("rendering mode can only be changed for text searches")
+		}
 		if query.Workday == nil {
 			return Query{}, errors.New("Workday query filters are missing")
 		}
@@ -298,7 +310,19 @@ func applyEditableFilters(query Query, editable EditableFilters) (Query, error) 
 		}
 		query.Workday = &normalized
 	case SourceText:
-		return Query{}, errors.New("text search filters cannot be edited; recreate the query instead")
+		if query.Text == nil {
+			return Query{}, errors.New("text search filters are missing")
+		}
+		if editable.ClientSideRender == nil {
+			return Query{}, errors.New("only rendering mode can be changed for text searches")
+		}
+		filters := *query.Text
+		filters.ClientSideRender = *editable.ClientSideRender
+		normalized, err := filters.Normalize()
+		if err != nil {
+			return Query{}, err
+		}
+		query.Text = &normalized
 	default:
 		return Query{}, fmt.Errorf("query %q has unsupported source type %q", query.Name, query.SourceType)
 	}
