@@ -23,7 +23,13 @@ func (r *fakeRenderer) Render(_ context.Context, requestURL string) (string, err
 func (r *fakeRenderer) Close() { r.closed = true }
 
 func TestSearchReturnsNoJobsWhenEmptyTextIsPresent(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.UserAgent(); got != browserUserAgent {
+			t.Errorf("User-Agent = %q, want %q", got, browserUserAgent)
+		}
+		if got := r.Header.Get("Accept"); got != "text/html,application/xhtml+xml" {
+			t.Errorf("Accept = %q", got)
+		}
 		_, _ = w.Write([]byte(`<html><body>Search again or try updating your filters</body></html>`))
 	}))
 	defer server.Close()

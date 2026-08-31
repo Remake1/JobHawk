@@ -21,6 +21,10 @@ const (
 	maxResponseSize = 10 << 20
 	renderTimeout   = 30 * time.Second
 	renderSettle    = 2 * time.Second
+	// Some job boards return different or unfiltered HTML to bot-identifying
+	// user agents. Use the same shape as a regular desktop Chrome request so
+	// server-rendered filters are honored without requiring Chromium.
+	browserUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 )
 
 // Filters is the JSONB payload stored for a text search query. When
@@ -196,7 +200,7 @@ func (c *Client) fetchHTML(ctx context.Context, requestURL string) (string, erro
 		return "", fmt.Errorf("create text search request: %w", err)
 	}
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	req.Header.Set("User-Agent", "JobHawk/1.0")
+	req.Header.Set("User-Agent", browserUserAgent)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
