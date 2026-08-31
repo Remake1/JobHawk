@@ -20,6 +20,8 @@ JobHawk is a single-user Go Telegram bot for saving and manually running job sea
 - PostgreSQL 18 in Compose, pgx v5 pooling, and sqlc-generated query code
 - A provider-independent `jobs.Job` result model
 - Daily 09:00 subscriptions for every saved query, with one Telegram digest
+- Durable daily/query run checkpoints with catch-up after process restarts
+- Transactional Telegram outbox delivery with automatic retry and backoff
 - Date-scoped 15, 30, or 60 minute alerts for individual saved queries
 - Durable first-seen job deduplication across queries and application restarts
 
@@ -158,7 +160,28 @@ provider identity has never been stored before. Jobs matched by multiple
 queries appear once. After all queries finish, the bot sends one aggregate
 Telegram report: either **No new jobs** or a list of newly discovered jobs.
 Individual query failures do not prevent the other queries or the digest from
-completing; the report includes a failure count.
+completing; the report includes a failure count. Provider, validation,
+rendering, and ordinary HTTP errors are terminal for that day's query and do
+not rerun the query or the full daily report. Only an HTTP 429 rate-limit
+response is retried.
+
+Scheduled runs and their per-query snapshots are durable. On startup, JobHawk
+resumes incomplete runs and, when the configured time has already passed, runs
+the current day's missed schedule. Query claims use renewable database leases,
+so another process can recover abandoned work without normally executing the
+same query concurrently.
+
+New-job attribution, query completion, and run completion are transactional.
+Completing a run creates one `notification_outbox` row in the same transaction;
+a background dispatcher retries Telegram failures after 1, 5, and 15 minutes,
+then after 1 hour and every 6 hours. Delivery is at least once: a crash in the
+small interval after Telegram accepts a message but before the sent checkpoint
+commits can result in a duplicate digest.
+
+Rate-limited queries remain pending while the other queries finish. JobHawk
+honors `Retry-After` with a one-minute minimum; without that header it retries
+the affected query after 5 minutes, 15 minutes, 1 hour, and then every 6 hours.
+It never reruns already completed or terminally failed queries in that run.
 
 ## Hourly subscriptions
 
@@ -176,6 +199,8 @@ before restarting the bot:
 ```sh
 docker compose exec -T postgres psql -U jobhawk -d jobhawk < db/migrations/002_create_jobs.sql
 docker compose exec -T postgres psql -U jobhawk -d jobhawk < db/migrations/003_create_hourly_search_queries.sql
+docker compose exec -T postgres psql -U jobhawk -d jobhawk < db/migrations/004_create_daily_runs_and_outbox.sql
+docker compose exec -T postgres psql -U jobhawk -d jobhawk < db/migrations/005_add_rate_limit_retries.sql
 ```
 
 ## Database model
@@ -190,6 +215,15 @@ source type.
 `jobs` stores one row per provider opening using the unique identity
 `(source_type, source_key, external_id)`. Its normalized display fields are
 refreshed on later sightings while `first_seen_at` remains unchanged.
+
+`daily_runs` stores one idempotent scheduled run per local date plus durable
+manual runs. `query_runs` contains the source/filter snapshot and lease-backed
+checkpoint for each query. `daily_run_jobs` retains the exact first-seen jobs
+that belong in a digest even if the process stops before delivery.
+
+`notification_outbox` stores the immutable digest payload, delivery lease,
+attempt count, next retry time, and final sent status. This prevents a Telegram
+failure from losing alerts that have already been committed to `jobs`.
 
 `hourly_search_queries` stores one date-scoped schedule per saved query, with a
 validated 15, 30, or 60 minute interval and its durable next run time. Its

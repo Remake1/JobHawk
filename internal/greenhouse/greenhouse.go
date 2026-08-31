@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"jobhawk/internal/jobs"
+	"jobhawk/internal/searcherrors"
 )
 
 const defaultBaseURL = "https://boards-api.greenhouse.io/v1/boards"
@@ -125,6 +126,9 @@ func (c *Client) Search(ctx context.Context, filters Filters) ([]jobs.Job, error
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, searcherrors.NewRateLimit("Greenhouse", resp, string(body))
+		}
 		return nil, fmt.Errorf("Greenhouse returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 

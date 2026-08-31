@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"jobhawk/internal/jobs"
+	"jobhawk/internal/searcherrors"
 )
 
 const defaultBaseURL = "https://api.ashbyhq.com/posting-api/job-board"
@@ -151,6 +152,9 @@ func (c *Client) Search(ctx context.Context, filters Filters) ([]jobs.Job, error
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, searcherrors.NewRateLimit("Ashby", resp, string(body))
+		}
 		return nil, fmt.Errorf("Ashby returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 

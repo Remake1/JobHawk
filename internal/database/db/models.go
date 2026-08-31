@@ -10,6 +10,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type DailyRun struct {
+	ID            int64              `json:"id"`
+	ScheduledDate pgtype.Date        `json:"scheduled_date"`
+	RunType       string             `json:"run_type"`
+	ScheduleKey   pgtype.Text        `json:"schedule_key"`
+	TargetChatID  int64              `json:"target_chat_id"`
+	Status        string             `json:"status"`
+	QueryCount    int32              `json:"query_count"`
+	FailureCount  int32              `json:"failure_count"`
+	StartedAt     pgtype.Timestamptz `json:"started_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DailyRunJob struct {
+	DailyRunID int64              `json:"daily_run_id"`
+	JobID      int64              `json:"job_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type HourlySearchQuery struct {
 	ID              int64              `json:"id"`
 	SearchQueryID   int64              `json:"search_query_id"`
@@ -32,6 +53,44 @@ type Job struct {
 	PostedAt    pgtype.Timestamptz `json:"posted_at"`
 	FirstSeenAt pgtype.Timestamptz `json:"first_seen_at"`
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+}
+
+type NotificationOutbox struct {
+	ID            int64              `json:"id"`
+	DailyRunID    int64              `json:"daily_run_id"`
+	Kind          string             `json:"kind"`
+	ChatID        int64              `json:"chat_id"`
+	Payload       json.RawMessage    `json:"payload"`
+	Status        string             `json:"status"`
+	Attempts      int32              `json:"attempts"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseToken    pgtype.Text        `json:"lease_token"`
+	LockedUntil   pgtype.Timestamptz `json:"locked_until"`
+	LastError     string             `json:"last_error"`
+	SentAt        pgtype.Timestamptz `json:"sent_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type QueryRun struct {
+	ID                int64              `json:"id"`
+	DailyRunID        int64              `json:"daily_run_id"`
+	SearchQueryID     int64              `json:"search_query_id"`
+	QueryName         string             `json:"query_name"`
+	SourceType        string             `json:"source_type"`
+	Filters           json.RawMessage    `json:"filters"`
+	Status            string             `json:"status"`
+	JobsFound         int32              `json:"jobs_found"`
+	NewJobs           int32              `json:"new_jobs"`
+	ErrorText         string             `json:"error_text"`
+	LeaseToken        pgtype.Text        `json:"lease_token"`
+	LockedUntil       pgtype.Timestamptz `json:"locked_until"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	RateLimitAttempts int32              `json:"rate_limit_attempts"`
+	NextAttemptAt     pgtype.Timestamptz `json:"next_attempt_at"`
 }
 
 type SearchQuery struct {

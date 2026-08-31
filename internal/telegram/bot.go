@@ -558,15 +558,26 @@ func (b *Bot) Notify(ctx context.Context, job jobs.Job) {
 // NotifyDailyDigest sends exactly one aggregate report to each subscribed
 // chat. Job processing is deliberately completed before this method is called.
 func (b *Bot) NotifyDailyDigest(ctx context.Context, report daily.Report) error {
-	text := formatDailyDigest(report)
 	var sendErrors []error
 	for _, chatID := range b.subscribers.All() {
-		if _, err := b.api.SendMessage(ctx, tu.Message(tu.ID(chatID), text)); err != nil {
-			b.logger.Error("send daily job digest", "chat_id", chatID, "error", err)
-			sendErrors = append(sendErrors, fmt.Errorf("send daily digest to chat %d: %w", chatID, err))
+		if err := b.SendDailyDigest(ctx, chatID, report); err != nil {
+			sendErrors = append(sendErrors, err)
 		}
 	}
 	return errors.Join(sendErrors...)
+}
+
+// SendDailyDigest delivers one durable outbox item. Paused subscribers are a
+// successful no-op, matching the previous in-memory notification behavior.
+func (b *Bot) SendDailyDigest(ctx context.Context, chatID int64, report daily.Report) error {
+	if !b.subscribers.Contains(chatID) {
+		return nil
+	}
+	if _, err := b.api.SendMessage(ctx, tu.Message(tu.ID(chatID), formatDailyDigest(report))); err != nil {
+		b.logger.Error("send daily job digest", "chat_id", chatID, "error", err)
+		return fmt.Errorf("send daily digest to chat %d: %w", chatID, err)
+	}
+	return nil
 }
 
 // NotifyHourlyResults sends one query-scoped alert only when a scheduled search

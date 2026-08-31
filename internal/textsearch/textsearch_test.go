@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"jobhawk/internal/searcherrors"
 )
 
 type fakeRenderer struct {
@@ -114,6 +117,20 @@ func TestSearchRejectsErrorResponse(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Search() expected an HTTP status error")
+	}
+}
+
+func TestSearchClassifiesRateLimitAndRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "120")
+		http.Error(w, "slow down", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.Client()).Search(context.Background(), Filters{URL: server.URL, NoJobsText: "No jobs"})
+	delay, ok := searcherrors.RetryDelay(err)
+	if !ok || delay != 2*time.Minute {
+		t.Fatalf("RetryDelay(%v) = %v, %t", err, delay, ok)
 	}
 }
 

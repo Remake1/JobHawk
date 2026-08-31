@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"jobhawk/internal/jobs"
+	"jobhawk/internal/searcherrors"
 )
 
 const (
@@ -222,6 +223,9 @@ func (c *Client) fetchPage(ctx context.Context, filters Filters, offset int, sea
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return apiResponse{}, searcherrors.NewRateLimit("Workday", resp, string(responseBody))
+		}
 		return apiResponse{}, fmt.Errorf("Workday returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
 	}
 

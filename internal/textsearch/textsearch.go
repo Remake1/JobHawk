@@ -15,6 +15,7 @@ import (
 	"github.com/chromedp/chromedp"
 
 	"jobhawk/internal/jobs"
+	"jobhawk/internal/searcherrors"
 )
 
 const (
@@ -209,6 +210,9 @@ func (c *Client) fetchHTML(ctx context.Context, requestURL string) (string, erro
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4_096))
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return "", searcherrors.NewRateLimit("job board", resp, string(body))
+		}
 		return "", fmt.Errorf("job board returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 

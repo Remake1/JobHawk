@@ -16,7 +16,6 @@ import (
 	"jobhawk/internal/database/db"
 	"jobhawk/internal/greenhouse"
 	"jobhawk/internal/hourly"
-	"jobhawk/internal/jobstore"
 	"jobhawk/internal/searchqueries"
 	telegrambot "jobhawk/internal/telegram"
 	"jobhawk/internal/textsearch"
@@ -48,7 +47,7 @@ func main() {
 	databaseQueries := db.New(pool)
 	queryStore := searchqueries.NewStore(databaseQueries)
 	hourlyStore := hourly.NewStore(databaseQueries)
-	discoveredJobStore := jobstore.NewStore(databaseQueries)
+	dailyStore := daily.NewStore(pool, databaseQueries)
 	greenhouseClient := greenhouse.NewClient(nil)
 	workdayClient := workday.NewClient(nil)
 	ashbyClient := ashby.NewClient(nil)
@@ -70,8 +69,9 @@ func main() {
 	}
 	dailyRunner := daily.NewRunner(
 		queryStore,
-		discoveredJobStore,
-		bot,
+		dailyStore,
+		cfg.TelegramChatID,
+		cfg.DailyTimezone,
 		ashbyClient,
 		greenhouseClient,
 		workdayClient,
@@ -80,6 +80,7 @@ func main() {
 	bot.SetDailyRunner(dailyRunner)
 	bot.SetHourlySubscriptions(hourlyStore, cfg.DailyTimezone)
 	scheduler := daily.NewScheduler(dailyRunner, cfg.DailyRunHour, cfg.DailyTimezone, logger)
+	outboxDispatcher := daily.NewDispatcher(dailyStore, bot, logger)
 	hourlyRunner := hourly.NewRunner(
 		hourlyStore,
 		queryStore,
@@ -96,6 +97,7 @@ func main() {
 	group.Go(func() error { return bot.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return hourlyScheduler.Run(groupCtx) })
+	group.Go(func() error { return outboxDispatcher.Run(groupCtx) })
 	if err := group.Wait(); err != nil {
 		logger.Error("application stopped with an error", "error", err)
 		os.Exit(1)

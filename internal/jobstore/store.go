@@ -25,6 +25,12 @@ type Store struct {
 	queries *db.Queries
 }
 
+type Stored struct {
+	Job        jobs.Job
+	DatabaseID int64
+	IsNew      bool
+}
+
 func NewStore(queries *db.Queries) *Store {
 	return &Store{queries: queries}
 }
@@ -32,24 +38,35 @@ func NewStore(queries *db.Queries) *Store {
 // Upsert stores the latest normalized job data and reports whether this is the
 // first time the provider job has ever been observed.
 func (s *Store) Upsert(ctx context.Context, discovered Discovered) (jobs.Job, bool, error) {
-	normalized, params, err := normalize(discovered)
+	stored, err := s.UpsertWithID(ctx, discovered)
 	if err != nil {
 		return jobs.Job{}, false, err
 	}
+	return stored.Job, stored.IsNew, nil
+}
 
-	_, err = s.queries.InsertJob(ctx, params)
+// UpsertWithID is the transactional form used by the daily-run store. In
+// addition to the normalized provider job, it returns the database identity so
+// a newly inserted row can be attributed to the run that discovered it.
+func (s *Store) UpsertWithID(ctx context.Context, discovered Discovered) (Stored, error) {
+	normalized, params, err := normalize(discovered)
+	if err != nil {
+		return Stored{}, err
+	}
+
+	row, err := s.queries.InsertJob(ctx, params)
 	if err == nil {
-		return normalized.Job, true, nil
+		return Stored{Job: normalized.Job, DatabaseID: row.ID, IsNew: true}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return jobs.Job{}, false, fmt.Errorf("insert discovered job: %w", err)
+		return Stored{}, fmt.Errorf("insert discovered job: %w", err)
 	}
 
-	_, err = s.queries.UpdateJob(ctx, db.UpdateJobParams(params))
+	row, err = s.queries.UpdateJob(ctx, db.UpdateJobParams(params))
 	if err != nil {
-		return jobs.Job{}, false, fmt.Errorf("update discovered job: %w", err)
+		return Stored{}, fmt.Errorf("update discovered job: %w", err)
 	}
-	return normalized.Job, false, nil
+	return Stored{Job: normalized.Job, DatabaseID: row.ID}, nil
 }
 
 func normalize(discovered Discovered) (Discovered, db.InsertJobParams, error) {
