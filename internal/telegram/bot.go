@@ -194,6 +194,7 @@ func (b *Bot) Run(ctx context.Context) error {
 func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 	if message.Chat.ID != b.allowedChatID {
 		b.logger.Warn("ignored message from unauthorized chat", "chat_id", message.Chat.ID)
+		b.sendText(ctx, message.Chat.ID, accessRestrictedMessage(message.Chat.ID))
 		return
 	}
 	text := strings.TrimSpace(message.Text)
@@ -368,6 +369,10 @@ func (b *Bot) handleMessage(ctx context.Context, message *telego.Message) {
 	if _, err := b.api.SendMessage(ctx, tu.Message(tu.ID(message.Chat.ID), response)); err != nil {
 		b.logger.Error("send command response", "chat_id", message.Chat.ID, "error", err)
 	}
+}
+
+func accessRestrictedMessage(chatID int64) string {
+	return fmt.Sprintf("Access is restricted to the configured Telegram chat.\n\nTo allow this chat, set:\nTELEGRAM_CHAT_ID=%d", chatID)
 }
 
 func commandFromText(text string) (string, bool) {

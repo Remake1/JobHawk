@@ -26,6 +26,14 @@ func TestFormatJob(t *testing.T) {
 	}
 }
 
+func TestAccessRestrictedMessageIncludesChatIDConfiguration(t *testing.T) {
+	got := accessRestrictedMessage(-1001234567890)
+	want := "Access is restricted to the configured Telegram chat.\n\nTo allow this chat, set:\nTELEGRAM_CHAT_ID=-1001234567890"
+	if got != want {
+		t.Fatalf("accessRestrictedMessage() = %q, want %q", got, want)
+	}
+}
+
 func TestFormatDailyDigestWithNoNewJobs(t *testing.T) {
 	got := formatDailyDigest(daily.Report{QueryCount: 3})
 	if got != "Daily job report\n\nNo new jobs." {
