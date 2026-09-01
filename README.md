@@ -8,11 +8,12 @@ Available subscriptions include daily subscriptions for every saved query, with 
 
 ## Screenshots
 <img width="356" height="340" alt="Screenshot 2026-08-31 at 22 24 21" src="https://github.com/user-attachments/assets/644f496d-dde9-4b4f-abda-479e2f9a0f83" />
-<img width="445" height="597" alt="Screenshot 2026-08-31 at 22 24 49" src="https://github.com/user-attachments/assets/1842788d-8958-475e-890f-a90e9f0d8292" />
-<img width="565" height="481" alt="Screenshot 2026-08-31 at 22 23 25" src="https://github.com/user-attachments/assets/26620f4f-0de8-46ec-8fd8-c4e91fcc6b9f" />
+<img width="445" height="442" alt="Screenshot 2026-08-31 at 22 37 52" src="https://github.com/user-attachments/assets/e9248b1c-11a9-41c8-a283-57f4a81c35a7" />
+
+
 <img width="398" height="448" alt="Screenshot 2026-08-31 at 22 26 09" src="https://github.com/user-attachments/assets/eacbbb58-136f-4759-8dc8-f97fb53757ec" />
 <img width="496" height="503" alt="Screenshot 2026-08-31 at 22 26 31" src="https://github.com/user-attachments/assets/b9f290f1-d25e-4136-bf48-cb44e653be6a" />
-
+<img width="565" height="481" alt="Screenshot 2026-08-31 at 22 23 25" src="https://github.com/user-attachments/assets/26620f4f-0de8-46ec-8fd8-c4e91fcc6b9f" />
 
 
 ## Run locally
